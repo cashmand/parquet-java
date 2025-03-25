@@ -53,8 +53,26 @@ public class VariantBuilder {
    * @param sizeLimitBytes the maximum size (in bytes) of the resulting Variant value or metadata
    */
   public VariantBuilder(boolean allowDuplicateKeys, int sizeLimitBytes) {
+    fixedMetadata = false;
+    this.dictionary = new HashMap<>();
+    this.dictionaryKeys = new ArrayList<>();
     this.allowDuplicateKeys = allowDuplicateKeys;
     this.sizeLimitBytes = sizeLimitBytes;
+  }
+
+  /**
+   * Set the metadata. May only be called if the builder has not yet added anything to the metadata.
+   * @param metadata
+   */
+  public void setFixedMetadata(HashMap<String, Integer> metadata) {
+    if (!this.dictionaryKeys.isEmpty()) {
+      throw new IllegalStateException("Cannot fix metadata once values have been added to it");
+    }
+    this.dictionary = metadata;
+    this.fixedMetadata = true;
+    // We don't need the dictionaryKeys list when metadata is fixed, and setting to null ensures that we'll
+    // fail if we accidentally try to use it. However, uses should be guarded by a cleaner exception.
+    this.dictionaryKeys = null;
   }
 
   /**
@@ -105,6 +123,9 @@ public class VariantBuilder {
    * the size limit
    */
   public Variant result() {
+    if (fixedMetadata) {
+      throw new IllegalStateException("Cannot reconstruct metadata when using fixed metadata");
+    }
     int numKeys = dictionaryKeys.size();
     // Use long to avoid overflow in accumulating lengths.
     long dictionaryStringSize = 0;
@@ -141,6 +162,14 @@ public class VariantBuilder {
     }
     VariantUtil.writeLong(metadata, offsetStart + numKeys * offsetSize, currentOffset, offsetSize);
     return new Variant(Arrays.copyOfRange(writeBuffer, 0, writePos), metadata);
+  }
+
+  // Return the variant value only, without metadata.
+  // Used in shredding to produce a final value, where all shredded values refer to a common
+  // metadata. It should be called instead of `result()` when fixedMetadata is true, although it is valid to
+  // call it if fixedMetadata is false.
+  public byte[] valueWithoutMetadata() {
+    return Arrays.copyOfRange(writeBuffer, 0, writePos);
   }
 
   public void appendString(String str) {
@@ -313,6 +342,16 @@ public class VariantBuilder {
     writePos += VariantUtil.UUID_SIZE;
   }
 
+  // Append raw bytes, already in the form required for storage in Variant.
+  public void appendUUIDBytes(byte[] bytes) {
+    checkCapacity(1 + VariantUtil.UUID_SIZE);
+    writeBuffer[writePos++] = VariantUtil.primitiveHeader(VariantUtil.UUID);
+    // TODO Throw a better exception if this is violated.
+    assert (bytes.length == VariantUtil.UUID_SIZE);
+    System.arraycopy(bytes, 0, writeBuffer, writePos, bytes.length);
+    writePos += bytes.length;
+  }
+
   /**
    * Adds a key to the Variant dictionary. If the key already exists, the dictionary is unmodified.
    * @param key the key to add
@@ -320,6 +359,10 @@ public class VariantBuilder {
    */
   public int addKey(String key) {
     return dictionary.computeIfAbsent(key, newKey -> {
+      if (fixedMetadata) {
+        // TODO: Better exception.
+        throw new IllegalArgumentException("Value in shredding refers to non-existent metadata string");
+      }
       int id = dictionaryKeys.size();
       dictionaryKeys.add(newKey.getBytes(StandardCharsets.UTF_8));
       return id;
@@ -496,12 +539,12 @@ public class VariantBuilder {
         });
         break;
       default:
-        shallowAppendVariantImpl(value, pos);
+        shallowAppendVariant(value, pos);
         break;
     }
   }
 
-  private void shallowAppendVariantImpl(byte[] value, int pos) {
+  public void shallowAppendVariant(byte[] value, int pos) {
     int size = VariantUtil.valueSize(value, pos);
     VariantUtil.checkIndex(pos + size - 1, value.length);
     checkCapacity(size);
@@ -661,10 +704,14 @@ public class VariantBuilder {
 
   private int writePos = 0;
   /** The dictionary for mapping keys to monotonically increasing ids. */
-  private final HashMap<String, Integer> dictionary = new HashMap<>();
+  private HashMap<String, Integer> dictionary;
   /** The keys in the dictionary, in id order. */
-  private final ArrayList<byte[]> dictionaryKeys = new ArrayList<>();
+  private ArrayList<byte[]> dictionaryKeys;
 
   private final boolean allowDuplicateKeys;
   private final int sizeLimitBytes;
+
+  // If true, metadata is provided in the constructor, and may not be modified - added values must refer to
+  // strings that already exist in metadata.
+  private boolean fixedMetadata;
 }

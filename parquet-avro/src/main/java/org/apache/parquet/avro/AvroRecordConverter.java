@@ -62,6 +62,7 @@ import org.apache.parquet.io.InvalidRecordException;
 import org.apache.parquet.io.api.Converter;
 import org.apache.parquet.io.api.GroupConverter;
 import org.apache.parquet.schema.GroupType;
+import org.apache.parquet.schema.LogicalTypeAnnotation;
 import org.apache.parquet.schema.MessageType;
 import org.apache.parquet.schema.Type;
 import org.slf4j.Logger;
@@ -383,7 +384,14 @@ class AvroRecordConverter<T> extends AvroConverters.AvroGroupConverter {
         }
         return newStringConverter(schema, model, parent);
       case RECORD:
-        return new AvroRecordConverter(parent, type.asGroupType(), schema, model);
+        // TODO: remove first condition. Just using it for testing until we have a real logical type annotation.
+        if (type.getName() == "v"
+            || type.getLogicalTypeAnnotation()
+                instanceof LogicalTypeAnnotation.VariantLogicalTypeAnnotation) {
+          return new AvroConverters.FieldVariantConverter(parent, type.asGroupType(), schema, model);
+        } else {
+          return new AvroRecordConverter(parent, type.asGroupType(), schema, model);
+        }
       case ENUM:
         return new AvroConverters.FieldEnumConverter(parent, schema, model);
       case ARRAY:

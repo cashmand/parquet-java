@@ -32,7 +32,6 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Locale;
 import java.util.UUID;
-import org.apache.parquet.cli.util.RuntimeIOException;
 
 /**
  * This Variant class holds the Variant-encoded value and metadata binary values.
@@ -360,7 +359,9 @@ public final class Variant {
       gen.flush();
       return writer.toString();
     } catch (IOException e) {
-      throw new RuntimeIOException("Failed to convert variant to json", e);
+      // TODO Fix exception
+      //      throw new RuntimeIOException("Failed to convert variant to json", e);
+      throw new IllegalArgumentException("Failed to convert variant to json", e);
     }
   }
 

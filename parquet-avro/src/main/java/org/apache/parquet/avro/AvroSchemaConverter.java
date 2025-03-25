@@ -466,10 +466,37 @@ public class AvroSchemaConverter {
                   LogicalTypeAnnotation.EnumLogicalTypeAnnotation enumLogicalType) {
                 return of(Schema.create(Schema.Type.STRING));
               }
+
+              @Override
+              public Optional<Schema> visit(
+                  LogicalTypeAnnotation.VariantLogicalTypeAnnotation variantLogicalType) {
+                String name = parquetGroupType.getName();
+                SchemaBuilder.FieldAssembler<Schema> builder = SchemaBuilder.builder(
+                        namespace(name, names))
+                    .record(name)
+                    .fields();
+                builder.name("metadata")
+                    .type(Schema.create(Schema.Type.BYTES))
+                    .noDefault();
+                builder.name("value").type().optional().type(Schema.create(Schema.Type.BYTES));
+                return of(builder.endRecord());
+              }
             })
             .orElseThrow(
                 () -> new UnsupportedOperationException("Cannot convert Parquet type " + parquetType));
       } else {
+        // TODO: Remove once logical type annotation is added, which should be handled in visitor above.
+        if (parquetGroupType.getName() == "v") {
+          String name = parquetGroupType.getName();
+          SchemaBuilder.FieldAssembler<Schema> builder = SchemaBuilder.builder(namespace(name, names))
+              .record(name)
+              .fields();
+          builder.name("metadata")
+              .type(Schema.create(Schema.Type.BYTES))
+              .noDefault();
+          builder.name("value").type().optional().type(Schema.create(Schema.Type.BYTES));
+          return builder.endRecord();
+        }
         // if no original type then it's a record
         return convertFields(parquetGroupType.getName(), parquetGroupType.getFields(), names);
       }
