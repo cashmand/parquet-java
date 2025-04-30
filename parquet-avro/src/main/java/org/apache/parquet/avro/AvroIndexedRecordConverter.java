@@ -169,8 +169,7 @@ class AvroIndexedRecordConverter<T extends IndexedRecord> extends GroupConverter
       case MAP:
         return new MapConverter(parent, type.asGroupType(), schema, model);
       case RECORD:
-        if (type.getName() == "v"
-            || type.getLogicalTypeAnnotation()
+        if (type.getLogicalTypeAnnotation()
                 instanceof LogicalTypeAnnotation.VariantLogicalTypeAnnotation) {
           return new AvroConverters.FieldVariantConverter(parent, type.asGroupType(), schema, model);
         } else {

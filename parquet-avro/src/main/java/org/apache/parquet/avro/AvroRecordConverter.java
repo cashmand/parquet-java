@@ -384,9 +384,7 @@ class AvroRecordConverter<T> extends AvroConverters.AvroGroupConverter {
         }
         return newStringConverter(schema, model, parent);
       case RECORD:
-        // TODO: remove first condition. Just using it for testing until we have a real logical type annotation.
-        if (type.getName() == "v"
-            || type.getLogicalTypeAnnotation()
+        if (type.getLogicalTypeAnnotation()
                 instanceof LogicalTypeAnnotation.VariantLogicalTypeAnnotation) {
           return new AvroConverters.FieldVariantConverter(parent, type.asGroupType(), schema, model);
         } else {
