@@ -108,6 +108,9 @@ public class TestVariant extends DirectWriterTest {
           variant(b -> b.appendUUID(UUID.fromString("f24f9b64-81fa-49d1-b74e-8c09a6e31c56")))
       };
 
+  private byte[] EMPTY_METADATA = PRIMITIVES[0].getMetadata();
+  private byte[] NULL_VALUE = PRIMITIVES[0].getValue();
+
   @Test
   public void testUnshredded() throws Exception {
     // Unshredded Variant should produce exactly the same value and metadata.
@@ -494,20 +497,6 @@ public class TestVariant extends DirectWriterTest {
           reader.read());
   }
 
-  // The following tests are based on Iceberg's TestVariantReaders suite.
-  @Test
-  public void testUnshreddedVariants() throws Exception {
-    for (Variant v : PRIMITIVES) {
-      TestSchema schema = new TestSchema();
-
-      GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
-          ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
-      GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
-      GenericRecord actual = writeAndRead(schema, record);
-      Assert.assertEquals("Should match the expected record", record, actual);
-    }
-  }
-
   // We need to store two copies of the schema: one without the Variant type annotation that is used to construct the
   // Avro schema for writing, and one with type annotation that is used in the actual written parquet schema, and when
   // reading.
@@ -529,6 +518,31 @@ public class TestVariant extends DirectWriterTest {
       parquetSchema = parquetSchema(variantType);
       unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
     }
+
+    TestSchema(GroupType variantType, GroupType unannotatedVariantType, MessageType parquetSchema, MessageType unannotatedParquetSchema) {
+      this.variantType = variantType;
+      this.unannotatedVariantType = unannotatedVariantType;
+      this.parquetSchema = parquetSchema;
+      this.unannotatedParquetSchema = unannotatedParquetSchema;
+    }
+  }
+
+  // The following tests are based on Iceberg's TestVariantReaders suite.
+  @Test
+  public void testUnshreddedVariants() throws Exception {
+    for (Variant v : PRIMITIVES) {
+      TestSchema schema = new TestSchema();
+
+      GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
+          ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
+      GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+      GenericRecord actual = writeAndRead(schema, record);
+      Assert.assertEquals(actual.get("id"), 1);
+
+      GenericRecord actualVariant = (GenericRecord) actual.get("var");
+      Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
+      Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
+    }
   }
 
   @Test
@@ -541,7 +555,11 @@ public class TestVariant extends DirectWriterTest {
           ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
-      Assert.assertEquals("Should match the expected record", record, actual);
+      Assert.assertEquals(actual.get("id"), 1);
+
+      GenericRecord actualVariant = (GenericRecord) actual.get("var");
+      Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
+      Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
     }
   }
 
@@ -571,6 +589,56 @@ public class TestVariant extends DirectWriterTest {
       Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
       Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
     }
+  }
+
+  @Test
+  public void testNullValueAndNullTypedValue() throws IOException {
+    TestSchema schema = new TestSchema(shreddedPrimitive(PrimitiveTypeName.INT32));
+
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+    Assert.assertEquals(actual.get("id"), 1);
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    Assert.assertEquals(ByteBuffer.wrap(NULL_VALUE), (ByteBuffer) actualVariant.get("value"));
+    Assert.assertEquals(ByteBuffer.wrap(EMPTY_METADATA), (ByteBuffer) actualVariant.get("metadata"));
+  }
+
+  @Test
+  public void testMissingValueColumn() throws IOException {
+    GroupType variantType =
+        Types.buildGroup(Type.Repetition.REQUIRED)
+            .as(LogicalTypeAnnotation.variantType((byte) 1))
+            .id(2)
+            .required(PrimitiveTypeName.BINARY)
+            .named("metadata")
+            .addField(shreddedPrimitive(PrimitiveTypeName.INT32))
+            .named("var");
+
+    GroupType unannotatedVariantType = Types.buildGroup(Type.Repetition.REQUIRED)
+            .id(2)
+            .required(PrimitiveTypeName.BINARY)
+            .named("metadata")
+            .addField(shreddedPrimitive(PrimitiveTypeName.INT32))
+            .named("var");
+    MessageType parquetSchema = parquetSchema(variantType);
+    MessageType unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
+
+    TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
+
+    GenericRecord variant =
+        recordFromMap(unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", 34));
+    GenericRecord record = recordFromMap(unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+    Assert.assertEquals(actual.get("id"), 1);
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    Assert.assertEquals(ByteBuffer.wrap(variant(b -> b.appendLong(34)).getValue()), (ByteBuffer) actualVariant.get("value"));
+    Assert.assertEquals(ByteBuffer.wrap(EMPTY_METADATA), (ByteBuffer) actualVariant.get("metadata"));
   }
 
   /**
@@ -614,7 +682,12 @@ public class TestVariant extends DirectWriterTest {
       writer.write(record);
     }
 
-    AvroParquetReader<GenericRecord> reader = new AvroParquetReader(new Configuration(), path);
+    Configuration conf = new Configuration();
+    // We need to set an explicit read schema, because Avro wrote the shredding schema as the Avro schema in the
+    // write, and it will use that by default. If we write using a proper shredding writer, the Avro schema
+    // should just contain a <metadata, value> record, and we won't need this.
+    AvroReadSupport.setAvroReadSchema(conf, avroSchema(testSchema.parquetSchema));
+    AvroParquetReader<GenericRecord> reader = new AvroParquetReader(conf, path);
     GenericRecord result = reader.read();
     assert(reader.read() == null);
     return result;
