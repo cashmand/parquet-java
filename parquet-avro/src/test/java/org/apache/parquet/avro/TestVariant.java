@@ -115,7 +115,7 @@ public class TestVariant extends DirectWriterTest {
     Binary expectedValue = Binary.fromConstantByteArray(testValue.getValue());
     Binary expectedMetadata = Binary.fromConstantByteArray(testValue.getMetadata());
     Path test = writeDirect(
-        "message VariantMessage {" + "  required group v {"
+        "message VariantMessage {" + "  required group v (VARIANT(1)) {"
             + "    required binary value;"
             + "    required binary metadata;"
             + "  }"
@@ -176,7 +176,7 @@ public class TestVariant extends DirectWriterTest {
     Binary expectedValue = Binary.fromConstantByteArray(testValue.getValue());
     Binary expectedMetadata = Binary.fromConstantByteArray(testValue.getMetadata());
     Path test = writeDirect(
-        "message VariantMessage {" + "  required group v {"
+        "message VariantMessage {" + "  required group v (VARIANT(1)) {"
             + "    optional binary value;"
             + "    required binary metadata;"
             + "    optional " + type + " typed_value " + annotation + ";"
@@ -301,7 +301,7 @@ public class TestVariant extends DirectWriterTest {
     Binary expectedMetadata = Binary.fromConstantByteArray(testValue.getMetadata());
     // TODO: is there a better way to write this test? All the Start* and End* calls seem excessive.
     Path test = writeDirect(
-        "message VariantMessage {" + "  required group v {"
+        "message VariantMessage {" + "  required group v (VARIANT(1)) {"
             + "    required binary metadata;"
             + "    optional binary value;"
             + "    optional group typed_value (LIST) {"
@@ -397,7 +397,7 @@ public class TestVariant extends DirectWriterTest {
     Binary expectedValue = Binary.fromConstantByteArray(testValue.getValue());
     Binary expectedMetadata = Binary.fromConstantByteArray(testValue.getMetadata());
     Path test = writeDirect(
-        "message VariantMessage {" + "  required group v {"
+        "message VariantMessage {" + "  required group v (VARIANT(1)) {"
             + "    required binary metadata;"
             + "    optional binary value;"
             + "    optional group typed_value {"
@@ -498,14 +498,36 @@ public class TestVariant extends DirectWriterTest {
   @Test
   public void testUnshreddedVariants() throws Exception {
     for (Variant v : PRIMITIVES) {
-      GroupType variantType = variant("var", 2);
-      MessageType parquetSchema = parquetSchema(variantType);
+      TestSchema schema = new TestSchema();
 
-      GenericRecord variant = recordFromMap(variantType,
+      GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
           ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
-      GenericRecord record = recordFromMap(parquetSchema, ImmutableMap.of("id", 1, "var", variant));
-      GenericRecord actual = writeAndRead(parquetSchema, record);
+      GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+      GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals("Should match the expected record", record, actual);
+    }
+  }
+
+  // We need to store two copies of the schema: one without the Variant type annotation that is used to construct the
+  // Avro schema for writing, and one with type annotation that is used in the actual written parquet schema, and when
+  // reading.
+  private class TestSchema {
+    MessageType parquetSchema;
+    MessageType unannotatedParquetSchema;
+    GroupType variantType;
+    GroupType unannotatedVariantType;
+    TestSchema(Type shreddedType) {
+      variantType = variant("var", 2, shreddedType);
+      unannotatedVariantType = unannotatedVariant("var", 2, shreddedType);
+      parquetSchema = parquetSchema(variantType);
+      unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
+    }
+
+    TestSchema() {
+      variantType = variant("var", 2);
+      unannotatedVariantType = unannotatedVariant("var", 2);
+      parquetSchema = parquetSchema(variantType);
+      unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
     }
   }
 
@@ -513,13 +535,12 @@ public class TestVariant extends DirectWriterTest {
   public void testUnshreddedVariantsWithShreddingSchema() throws Exception {
     for (Variant v : PRIMITIVES) {
       // Parquet schema has a shredded field, but it is unused by the data.
-      GroupType variantType = variant("var", 2, shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
-      MessageType parquetSchema = parquetSchema(variantType);
+      TestSchema schema = new TestSchema(shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
 
-      GenericRecord variant = recordFromMap(variantType,
+      GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
           ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
-      GenericRecord record = recordFromMap(parquetSchema, ImmutableMap.of("id", 1, "var", variant));
-      GenericRecord actual = writeAndRead(parquetSchema, record);
+      GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+      GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals("Should match the expected record", record, actual);
     }
   }
@@ -531,25 +552,24 @@ public class TestVariant extends DirectWriterTest {
         // NULL isn't a valid type for shredding.
         continue;
       }
-      GroupType variantType = variant("var", 2, shreddedType(v));
-      MessageType parquetSchema = parquetSchema(variantType);
+      TestSchema schema = new TestSchema(shreddedType(v));
 
       GenericRecord variant =
           recordFromMap(
-              variantType,
+              schema.unannotatedVariantType,
               ImmutableMap.of(
                   "metadata",
                   v.getMetadata(),
                   "typed_value",
                   toAvroValue(v)));
-      GenericRecord record = recordFromMap(parquetSchema, ImmutableMap.of("id", 1, "var", variant));
+      GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
-      GenericRecord actual = writeAndRead(parquetSchema, record);
+      GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      Assert.assertEquals(v.getValue(), actualVariant.get("value"));
-      Assert.assertEquals(v.getMetadata(), actualVariant.get("metadata"));
+      Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
+      Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
     }
   }
 
@@ -559,14 +579,14 @@ public class TestVariant extends DirectWriterTest {
    */
   private static class TestWriterBuilder
       extends ParquetWriter.Builder<GenericRecord, TestWriterBuilder> {
-    private MessageType parquetSchema = null;
+    private TestSchema schema = null;
 
     protected TestWriterBuilder(Path path) {
       super(path);
     }
 
-    TestWriterBuilder withFileType(MessageType schema) {
-      this.parquetSchema = schema;
+    TestWriterBuilder withFileType(TestSchema schema) {
+      this.schema = schema;
       return self();
     }
 
@@ -577,11 +597,11 @@ public class TestVariant extends DirectWriterTest {
 
     @Override
     protected WriteSupport<GenericRecord> getWriteSupport(Configuration conf) {
-      return new AvroWriteSupport<>(parquetSchema, avroSchema(parquetSchema), GenericData.get());
+      return new AvroWriteSupport<>(schema.parquetSchema, avroSchema(schema.unannotatedParquetSchema), GenericData.get());
     }
   }
 
-  GenericRecord writeAndRead(MessageType parquetSchema, GenericRecord record)
+  GenericRecord writeAndRead(TestSchema testSchema, GenericRecord record)
       throws IOException {
     // Copied from TestSpecificReadWrite.java. Why does it do these weird things?
     File tmp = File.createTempFile(getClass().getSimpleName(), ".tmp");
@@ -590,7 +610,7 @@ public class TestVariant extends DirectWriterTest {
     Path path = new Path(tmp.getPath());
 
     try (ParquetWriter<GenericRecord> writer =
-             new TestWriterBuilder(path).withFileType(parquetSchema).withConf(CONF).build()) {
+             new TestWriterBuilder(path).withFileType(testSchema).withConf(CONF).build()) {
       writer.write(record);
     }
 
@@ -720,7 +740,17 @@ public class TestVariant extends DirectWriterTest {
   private static GroupType variant(String name, int fieldId) {
     return Types.buildGroup(Type.Repetition.REQUIRED)
         .id(fieldId)
-        .as(LogicalTypeAnnotation.variantType())
+        .as(LogicalTypeAnnotation.variantType((byte) 1))
+        .required(PrimitiveTypeName.BINARY)
+        .named("metadata")
+        .required(PrimitiveTypeName.BINARY)
+        .named("value")
+        .named(name);
+  }
+
+  private static GroupType unannotatedVariant(String name, int fieldId) {
+    return Types.buildGroup(Type.Repetition.REQUIRED)
+        .id(fieldId)
         .required(PrimitiveTypeName.BINARY)
         .named("metadata")
         .required(PrimitiveTypeName.BINARY)
@@ -729,6 +759,20 @@ public class TestVariant extends DirectWriterTest {
   }
 
   private static GroupType variant(String name, int fieldId, Type shreddedType) {
+    checkShreddedType(shreddedType);
+    return Types.buildGroup(Type.Repetition.OPTIONAL)
+        .id(fieldId)
+        .as(LogicalTypeAnnotation.variantType((byte) 1))
+        .required(PrimitiveTypeName.BINARY)
+        .named("metadata")
+        .optional(PrimitiveTypeName.BINARY)
+        .named("value")
+        .addField(shreddedType)
+        .named(name);
+  }
+
+  // Shredding schema with no Variant logical annotation. Needed in order to construct the Avro schema.
+  private static GroupType unannotatedVariant(String name, int fieldId, Type shreddedType) {
     checkShreddedType(shreddedType);
     return Types.buildGroup(Type.Repetition.OPTIONAL)
         .id(fieldId)
