@@ -167,6 +167,10 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
         } else if (annotation instanceof LogicalTypeAnnotation.IntLogicalTypeAnnotation) {
           LogicalTypeAnnotation.IntLogicalTypeAnnotation intAnnotation =
               (LogicalTypeAnnotation.IntLogicalTypeAnnotation) annotation;
+          if (!intAnnotation.isSigned()) {
+            throw new UnsupportedOperationException("Unsupported shredded value type: " +
+              intAnnotation.toString());
+          }
           int width = intAnnotation.getBitWidth();
           if (width == 8) {
             typedConverter = new VariantByteConverter();
@@ -177,7 +181,8 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
           } else if (width == 64) {
             typedConverter = new VariantLongConverter();
           } else {
-            throw new IllegalArgumentException("Invalid integral width");
+            throw new UnsupportedOperationException("Unsupported shredded value type: " +
+                intAnnotation.toString());
           }
         } else if (annotation == null && primitiveType == INT32) {
           typedConverter = new VariantIntConverter();
@@ -235,8 +240,8 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
           typedConverter = new VariantBinaryConverter();
         } else {
           String annotationString = annotation == null ? "" : annotation.toString();
-          throw new IllegalArgumentException(
-              "Unknown Variant primitive type " + primitiveType.toString() + " " + annotationString);
+          throw new UnsupportedOperationException(
+              "Unsupported shredded value type: " + field.toString());
         }
       }
 
@@ -292,7 +297,7 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
         byte[] value = variantValue.getBytes();
         int basicType = value[0] & VariantUtil.BASIC_TYPE_MASK;
         if (basicType != VariantUtil.OBJECT || !typedValueIsObject) {
-          throw new MalformedVariantException("value and typed_value are both non-null for a non-object");
+          throw new IllegalArgumentException("Invalid variant, conflicting value and typed_value");
         }
         // Write the remaining fields from `value`.
         ArrayList<VariantBuilder.FieldEntry> fields =

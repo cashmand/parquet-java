@@ -25,12 +25,10 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.function.Consumer;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -44,7 +42,7 @@ import org.apache.parquet.conf.ParquetConfiguration;
 import org.apache.parquet.conf.PlainParquetConfiguration;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.api.WriteSupport;
-import org.apache.parquet.io.OutputFile;
+import org.apache.parquet.io.ParquetDecodingException;
 import org.apache.parquet.io.api.Binary;
 import org.apache.parquet.io.api.RecordConsumer;
 import org.apache.parquet.schema.*;
@@ -641,6 +639,81 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(ByteBuffer.wrap(EMPTY_METADATA), (ByteBuffer) actualVariant.get("metadata"));
   }
 
+  @Test
+  public void testValueAndTypedValueConflict() throws IOException {
+    TestSchema schema = new TestSchema(shreddedPrimitive(PrimitiveTypeName.INT32));
+
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                EMPTY_METADATA,
+                "value",
+                variant(b -> b.appendString("str")).getValue(),
+                "typed_value",
+                34));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    assertThrows(() -> writeAndRead(schema, record), IllegalArgumentException.class,
+        "Invalid variant, conflicting value and typed_value");
+  }
+
+  @Test
+  public void testUnsignedInteger() {
+    TestSchema schema = new TestSchema(shreddedPrimitive(PrimitiveTypeName.INT32, LogicalTypeAnnotation.intType(32, false)));
+
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    assertThrows(() -> writeAndRead(schema, record),
+        UnsupportedOperationException.class, "Unsupported shredded value type: INTEGER(32,false)");
+  }
+
+  @Test
+  public void testFixedLengthByteArray() {
+    Type shreddedType = Types.optional(PrimitiveTypeName.FIXED_LEN_BYTE_ARRAY).length(4).named("typed_value");
+    TestSchema schema = new TestSchema(shreddedType);
+
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    assertThrows(() -> writeAndRead(schema, record),
+        UnsupportedOperationException.class,
+        "Unsupported shredded value type: optional fixed_len_byte_array(4) typed_value");
+  }
+
+  @Test
+  public void testShreddedObject() throws IOException {
+    // TODO: Build this at class level, without parseJson, need to deal with exception.
+    byte[] TEST_METADATA = VariantBuilder.parseJson(
+        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
+
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", serialize(NULL_VALUE)));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", ""));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+    Assert.assertEquals(actual.get("id"), 1);
+
+    byte[] expectedValue = VariantBuilder.parseJson(
+        "{\"a\": null, \"b\": \"\"}").getValue();
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    Assert.assertEquals(ByteBuffer.wrap(TEST_METADATA), actualVariant.get("metadata"));
+    Assert.assertEquals(ByteBuffer.wrap(expectedValue), actualVariant.get("value"));
+  }
+
   /**
    * This is a custom Parquet writer builder that injects a specific Parquet schema and then uses
    * the Avro object model. This ensures that the Parquet file's schema is exactly what was passed.
@@ -857,6 +930,20 @@ public class TestVariant extends DirectWriterTest {
         .named(name);
   }
 
+  private static void checkField(GroupType fieldType) {
+    Preconditions.checkArgument(
+        fieldType.isRepetition(Type.Repetition.REQUIRED),
+        "Invalid field type repetition: %s should be REQUIRED",
+        fieldType.getRepetition());
+  }
+
+  private static GroupType objectFields(GroupType... fields) {
+    for (GroupType fieldType : fields) {
+      checkField(fieldType);
+    }
+
+    return Types.buildGroup(Type.Repetition.OPTIONAL).addFields(fields).named("typed_value");
+  }
   private static Type shreddedPrimitive(PrimitiveTypeName primitive) {
     return Types.optional(primitive).named("typed_value");
   }
@@ -888,6 +975,40 @@ public class TestVariant extends DirectWriterTest {
               AvroSchemaConverter.ADD_LIST_ELEMENT_RECORDS,
               "false"));
 
+
+  private static GroupType shreddedField(String name, Type shreddedType) {
+    checkShreddedType(shreddedType);
+    return Types.buildGroup(Type.Repetition.REQUIRED)
+        .optional(PrimitiveTypeName.BINARY)
+        .named("value")
+        .addField(shreddedType)
+        .named(name);
+  }
+
+  private static GroupType element(Type shreddedType) {
+    return shreddedField("element", shreddedType);
+  }
+
+  private static GroupType list(GroupType elementType) {
+    return Types.optionalList().element(elementType).named("typed_value");
+  }
+
+  private static void checkListType(GroupType listType) {
+    // Check the list is a 3-level structure
+    Preconditions.checkArgument(
+        listType.getFieldCount() == 1
+            && listType.getFields().get(0).isRepetition(Type.Repetition.REPEATED),
+        "Invalid list type: does not contain single repeated field: %s",
+        listType);
+
+    GroupType repeated = listType.getFields().get(0).asGroupType();
+    Preconditions.checkArgument(
+        repeated.getFieldCount() == 1
+            && repeated.getFields().get(0).isRepetition(Type.Repetition.REQUIRED),
+        "Invalid list type: does not contain single required subfield: %s",
+        listType);
+  }
+
   private static org.apache.avro.Schema avroSchema(GroupType schema) {
     if (schema instanceof MessageType) {
       return new AvroSchemaConverter(CONF).convert((MessageType) schema);
@@ -916,6 +1037,27 @@ public class TestVariant extends DirectWriterTest {
         shreddedType.isRepetition(Type.Repetition.OPTIONAL),
         "Invalid shredded type repetition: %s should be OPTIONAL",
         shreddedType.getRepetition());
+  }
+
+  // Check for the given excpetion with message, possibly wrapped by a ParquetDecodingException
+  void assertThrows(Callable callable, Class<? extends Exception> exception, String msg) {
+    try {
+      callable.call();
+      Assert.fail("No exception was thrown. Expected: " + exception.getName());
+    } catch (Exception actual) {
+      try {
+        if (actual.getClass().equals(ParquetDecodingException.class)) {
+          Assert.assertTrue(actual.getCause().getMessage().contains(msg));
+          Assert.assertEquals(actual.getCause().getClass(), exception);
+        } else {
+          Assert.assertTrue(actual.getMessage().contains(msg));
+          Assert.assertEquals(actual.getClass(), exception);
+        }
+      } catch (AssertionError e) {
+        e.addSuppressed(actual);
+        throw e;
+      }
+    }
   }
 
 }
