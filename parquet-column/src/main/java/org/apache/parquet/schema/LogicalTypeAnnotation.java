@@ -155,12 +155,6 @@ public abstract class LogicalTypeAnnotation {
         return float16Type();
       }
     },
-    VARIANT {
-      @Override
-      protected LogicalTypeAnnotation fromString(List<String> params) {
-        return variantType();
-      }
-    },
     UNKNOWN {
       @Override
       protected LogicalTypeAnnotation fromString(List<String> params) {
@@ -338,10 +332,6 @@ public abstract class LogicalTypeAnnotation {
 
   public static Float16LogicalTypeAnnotation float16Type() {
     return Float16LogicalTypeAnnotation.INSTANCE;
-  }
-
-  public static VariantLogicalTypeAnnotation variantType() {
-    return VariantLogicalTypeAnnotation.INSTANCE;
   }
 
   public static UnknownLogicalTypeAnnotation unknownType() {
@@ -1021,29 +1011,6 @@ public abstract class LogicalTypeAnnotation {
     }
   }
 
-  public static class VariantLogicalTypeAnnotation extends LogicalTypeAnnotation {
-    private static final VariantLogicalTypeAnnotation INSTANCE = new VariantLogicalTypeAnnotation();
-    public static final int BYTES = 2;
-
-    private VariantLogicalTypeAnnotation() {}
-
-    @Override
-    public OriginalType toOriginalType() {
-      // No OriginalType for Variant
-      return null;
-    }
-
-    @Override
-    public <T> Optional<T> accept(LogicalTypeAnnotationVisitor<T> logicalTypeAnnotationVisitor) {
-      return logicalTypeAnnotationVisitor.visit(this);
-    }
-
-    @Override
-    LogicalTypeToken getType() {
-      return LogicalTypeToken.VARIANT;
-    }
-  }
-
   public static class UnknownLogicalTypeAnnotation extends LogicalTypeAnnotation {
     private static final UnknownLogicalTypeAnnotation INSTANCE = new UnknownLogicalTypeAnnotation();
 
@@ -1293,10 +1260,6 @@ public abstract class LogicalTypeAnnotation {
     }
 
     default Optional<T> visit(UnknownLogicalTypeAnnotation unknownLogicalTypeAnnotation) {
-      return empty();
-    }
-
-    default Optional<T> visit(VariantLogicalTypeAnnotation variantLogicalType) {
       return empty();
     }
   }
