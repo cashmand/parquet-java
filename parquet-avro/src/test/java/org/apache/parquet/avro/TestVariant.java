@@ -123,10 +123,21 @@ public class TestVariant extends DirectWriterTest {
   private byte[] NULL_VALUE = PRIMITIVES[0];
 
   private byte[] TEST_METADATA;
+  private byte[] TEST_OBJECT;
 
   public TestVariant() throws Exception {
     TEST_METADATA = VariantBuilder.parseJson(
         "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
+
+    TEST_OBJECT = variant(b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendNull();
+      entries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      b.finishWritingObject(startWritePos, entries);
+    });
   }
 
   @Test
@@ -1610,6 +1621,229 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual2.get("id"), 2);
     GenericRecord actualVariant2 = (GenericRecord) actual2.get("var");
     assertEquivalent(TEST_METADATA, expected2, actualVariant2);
+  }
+
+  @Test
+  public void testArrayWithNonArray() throws IOException {
+    Type shreddedType = shreddedPrimitive(PrimitiveTypeName.BINARY, STRING);
+    GroupType elementType = element(shreddedType);
+    TestSchema schema = new TestSchema(list(elementType));
+
+    List<GenericRecord> arr1 =
+        Arrays.asList(
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "comedy")),
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "drama")));
+    GenericRecord var1 =
+        recordFromMap(
+            schema.unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", arr1));
+    GenericRecord row1 = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", var1));
+
+    byte[] expectedArray1 = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<Integer> entries= new ArrayList<>();
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("comedy");
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("drama");
+      b.finishWritingArray(startWritePos, entries);
+    });
+
+    GenericRecord var2 =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata", EMPTY_METADATA, "value", variant(b -> b.appendLong(34))));
+    GenericRecord row2 = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 2, "var", var2));
+
+    byte[] expectedValue2 = variant(b -> b.appendLong(34));
+
+    GenericRecord var3 =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "value", TEST_OBJECT));
+    GenericRecord row3 = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 3, "var", var3));
+
+    byte[] expectedObject3 = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendNull();
+      entries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    // Test array is read properly after a non-array
+    List<GenericRecord> arr4 =
+        Arrays.asList(
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "action")),
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "horror")));
+    GenericRecord var4 =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", arr4));
+    GenericRecord row4 = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 4, "var", var4));
+
+    byte[] expectedArray4 = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<Integer> entries= new ArrayList<>();
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("action");
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("horror");
+      b.finishWritingArray(startWritePos, entries);
+    });
+
+    List<GenericRecord> actual = writeAndRead(schema, Arrays.asList(row1, row2, row3, row4));
+    GenericRecord actual1 = actual.get(0);
+    Assert.assertEquals(actual1.get("id"), 1);
+    GenericRecord actualVariant1 = (GenericRecord) actual1.get("var");
+    assertEquivalent(EMPTY_METADATA, expectedArray1, actualVariant1);
+
+    GenericRecord actual2 = actual.get(1);
+    Assert.assertEquals(actual2.get("id"), 2);
+    GenericRecord actualVariant2 = (GenericRecord) actual2.get("var");
+    assertEquivalent(EMPTY_METADATA, expectedValue2, actualVariant2);
+
+    GenericRecord actual3 = actual.get(2);
+    Assert.assertEquals(actual3.get("id"), 3);
+    GenericRecord actualVariant3 = (GenericRecord) actual3.get("var");
+    assertEquivalent(TEST_METADATA, expectedObject3, actualVariant3);
+
+    GenericRecord actual4 = actual.get(3);
+    Assert.assertEquals(actual4.get("id"), 4);
+    GenericRecord actualVariant4 = (GenericRecord) actual4.get("var");
+    assertEquivalent(TEST_METADATA, expectedArray4, actualVariant4);
+  }
+
+  @Test
+  public void testArrayMissingValueColumn() throws IOException {
+    Type shreddedType = shreddedPrimitive(PrimitiveTypeName.BINARY, STRING);
+    GroupType elementType = element(shreddedType);
+    GroupType unannotatedVariantType =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .id(2)
+            .required(PrimitiveTypeName.BINARY)
+            .named("metadata")
+            .addField(list(elementType))
+            .named("var");
+
+    GroupType variantType =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .id(2)
+            .as(LogicalTypeAnnotation.variantType((byte) 1))
+            .required(PrimitiveTypeName.BINARY)
+            .named("metadata")
+            .addField(list(elementType))
+            .named("var");
+
+    // TODO: Can probably let TestSchema figure out parquetSchema for all these cases.
+    MessageType parquetSchema = parquetSchema(variantType);
+    MessageType unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
+
+    TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
+
+    List<GenericRecord> arr =
+        Arrays.asList(
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "comedy")),
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "drama")));
+    GenericRecord var =
+        recordFromMap(
+            schema.unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", arr));
+    GenericRecord row = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", var));
+
+    byte[] expectedArray = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<Integer> entries= new ArrayList<>();
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("comedy");
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("drama");
+      b.finishWritingArray(startWritePos, entries);
+    });
+
+    GenericRecord actual = writeAndRead(schema, row);
+    Assert.assertEquals(actual.get("id"), 1);
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(EMPTY_METADATA, expectedArray, actualVariant);
+  }
+
+  @Test
+  public void testArrayMissingElementValueColumn() throws IOException {
+    Type shreddedType = shreddedPrimitive(PrimitiveTypeName.BINARY, STRING);
+    GroupType elementType =
+        Types.buildGroup(Type.Repetition.REQUIRED).addField(shreddedType).named("element");
+
+    TestSchema schema = new TestSchema(list(elementType));
+
+    List<GenericRecord> arr =
+        Arrays.asList(
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "comedy")),
+            recordFromMap(elementType, ImmutableMap.of("typed_value", "drama")));
+    GenericRecord var =
+        recordFromMap(
+            schema.unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", arr));
+    GenericRecord row = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", var));
+
+    byte[] expectedArray = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<Integer> entries= new ArrayList<>();
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("comedy");
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendString("drama");
+      b.finishWritingArray(startWritePos, entries);
+    });
+
+    GenericRecord actual = writeAndRead(schema, row);
+    Assert.assertEquals(actual.get("id"), 1);
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(EMPTY_METADATA, expectedArray, actualVariant);
+  }
+
+  @Test
+  public void testArrayWithElementNullValueAndNullTypedValue() throws IOException {
+    // Test the invalid case that both value and typed_value of an element are null
+    Type shreddedType = shreddedPrimitive(PrimitiveTypeName.BINARY, STRING);
+    GroupType elementType = element(shreddedType);
+
+    TestSchema schema = new TestSchema(list(elementType));
+
+    GenericRecord element = recordFromMap(elementType, ImmutableMap.of());
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", Arrays.asList(element)));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    byte[] expectedArray = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<Integer> entries= new ArrayList<>();
+      entries.add(b.getWritePos() - startWritePos);
+      b.appendNull();
+      b.finishWritingArray(startWritePos, entries);
+    });
+
+    GenericRecord actual = writeAndRead(schema, record);
+    Assert.assertEquals(actual.get("id"), 1);
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(EMPTY_METADATA, expectedArray, actualVariant);
+  }
+
+  @Test
+  public void testArrayWithElementValueTypedValueConflict() {
+    // Test the invalid case that both value and typed_value of an element are not null
+    Type shreddedType = shreddedPrimitive(PrimitiveTypeName.BINARY, STRING);
+    GroupType elementType = element(shreddedType);
+    TestSchema schema = new TestSchema(list(elementType));
+
+    GenericRecord element =
+        recordFromMap(elementType, ImmutableMap.of("value", variant(b -> b.appendLong(3)), "typed_value", "comedy"));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", Arrays.asList(element)));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    assertThrows(() -> writeAndRead(schema, record),
+        IllegalArgumentException.class,
+        "Invalid variant, conflicting value and typed_value");
   }
 
   /**
