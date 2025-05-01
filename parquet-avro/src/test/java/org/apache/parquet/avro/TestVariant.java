@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -63,6 +64,14 @@ public class TestVariant extends DirectWriterTest {
     VariantBuilder builder = new VariantBuilder(false);
     appendValue.accept(builder);
     return builder.result();
+  }
+
+  // Returns a Variant value based on buildling with fixed metadata.
+  private static Variant variant(byte[] metadata, Consumer<VariantBuilder> appendValue) {
+    VariantBuilder builder = new VariantBuilder(false);
+    builder.setFixedMetadata(VariantUtil.getMetadataMap(metadata));
+    appendValue.accept(builder);
+    return new Variant(builder.valueWithoutMetadata(), metadata);
   }
 
   private static final Variant[] PRIMITIVES =
@@ -108,6 +117,13 @@ public class TestVariant extends DirectWriterTest {
 
   private byte[] EMPTY_METADATA = PRIMITIVES[0].getMetadata();
   private Variant NULL_VALUE = PRIMITIVES[0];
+
+  private byte[] TEST_METADATA;
+
+  public TestVariant() throws Exception {
+    TEST_METADATA = VariantBuilder.parseJson(
+        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
+  }
 
   @Test
   public void testUnshredded() throws Exception {
@@ -684,10 +700,6 @@ public class TestVariant extends DirectWriterTest {
 
   @Test
   public void testShreddedObject() throws IOException {
-    // TODO: Build this at class level, without parseJson, need to deal with exception.
-    byte[] TEST_METADATA = VariantBuilder.parseJson(
-        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
-
     GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
     GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
     GroupType objectFields = objectFields(fieldA, fieldB);
@@ -712,10 +724,6 @@ public class TestVariant extends DirectWriterTest {
 
   @Test
   public void testShreddedObjectMissingValueColumn() throws IOException {
-    // TODO: Build this at class level, without parseJson, need to deal with exception.
-    byte[] TEST_METADATA = VariantBuilder.parseJson(
-        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
-
     GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
     GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
     GroupType objectFields = objectFields(fieldA, fieldB);
@@ -758,9 +766,6 @@ public class TestVariant extends DirectWriterTest {
 
   @Test
   public void testShreddedObjectMissingField() throws IOException {
-    // TODO: Build this at class level, without parseJson, need to deal with exception.
-    byte[] TEST_METADATA = VariantBuilder.parseJson(
-        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
     GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
     GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
     GroupType objectFields = objectFields(fieldA, fieldB);
@@ -779,6 +784,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
+    // TODO: I want to make sure that the metadata IDs are the same, so I need to pre-populate the metadata.
     Variant expectedValue = VariantBuilder.parseJson(
         "{\"a\": false}");
 
@@ -788,8 +794,6 @@ public class TestVariant extends DirectWriterTest {
 
   @Test
   public void testEmptyShreddedObject() throws IOException {
-    byte[] TEST_METADATA = VariantBuilder.parseJson(
-        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
     GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
     GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
     GroupType objectFields = objectFields(fieldA, fieldB);
@@ -807,6 +811,85 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual.get("id"), 1);
 
     Variant expectedValue = VariantBuilder.parseJson("{}");
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testShreddedObjectMissingFieldValueColumn() throws IOException {
+    // field groups do not have value
+    GroupType fieldA =
+        Types.buildGroup(Type.Repetition.REQUIRED)
+            .addField(shreddedPrimitive(PrimitiveTypeName.INT32))
+            .named("a");
+    GroupType fieldB =
+        Types.buildGroup(Type.Repetition.REQUIRED)
+            .addField(shreddedPrimitive(PrimitiveTypeName.BINARY, STRING))
+            .named("b");
+    GroupType objectFields =
+        Types.buildGroup(Type.Repetition.OPTIONAL).addFields(fieldA, fieldB).named("typed_value");
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of()); // typed_value=null
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = variant(TEST_METADATA, b -> {
+            int startWritePos = b.getWritePos();
+            ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+            entries.add(new VariantBuilder.FieldEntry("b", 1, 0));
+            b.appendString("iceberg");
+            b.finishWritingObject(startWritePos, entries);
+      });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+
+  @Test
+  public void testShreddedObjectMissingTypedValue() throws IOException {
+    // field groups do not have typed_value
+    GroupType fieldA =
+        Types.buildGroup(Type.Repetition.REQUIRED)
+            .optional(PrimitiveTypeName.BINARY)
+            .named("value")
+            .named("a");
+    GroupType fieldB =
+        Types.buildGroup(Type.Repetition.REQUIRED)
+            .optional(PrimitiveTypeName.BINARY)
+            .named("value")
+            .named("b");
+    GroupType objectFields =
+        Types.buildGroup(Type.Repetition.OPTIONAL).addFields(fieldA, fieldB).named("typed_value");
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of()); // value=null
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendString("iceberg")).getValue()));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("b", 1, 0));
+      b.appendString("iceberg");
+      b.finishWritingObject(startWritePos, entries);
+    });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
