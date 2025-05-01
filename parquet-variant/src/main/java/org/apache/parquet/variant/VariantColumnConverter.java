@@ -87,7 +87,8 @@ interface VariantConverter {
 /**
  * Converter for shredded Variant.
  * The top-level converter is handled by a subclass that also reads metadata.
- * The GroupConverter's children are a value, typed_value, and (optionally) metadata.
+ * The GroupConverter's children are a value, typed_value, and (at the top levle) metadata.
+ * value or typed_value may be absent.
  *
  * Values in `typed_value` are appended by the child converter. Values in `value` are stored by the
  * child converter, but only appended when completing this group. Additionally, object fields are
@@ -283,6 +284,10 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
     VariantBuilder builder = this.builder.builder;
 
     Binary variantValue = null;
+    ArrayList<VariantBuilder.FieldEntry> fields = null;
+    if (typedValueIsObject) {
+      fields = ((VariantObjectConverter) converters[typedValueIdx]).getFieldsAndReset();
+    }
     if (valueIdx >= 0) {
       variantValue = ((VariantValueConverter) converters[valueIdx]).getValue();
     }
@@ -296,13 +301,12 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
         // Both value and typed_value were non-null. This is only valid for an object.
         byte[] value = variantValue.getBytes();
         int basicType = value[0] & VariantUtil.BASIC_TYPE_MASK;
-        if (basicType != VariantUtil.OBJECT || !typedValueIsObject) {
+        if (basicType != VariantUtil.OBJECT || fields == null) {
           throw new IllegalArgumentException("Invalid variant, conflicting value and typed_value");
         }
-        // Write the remaining fields from `value`.
-        ArrayList<VariantBuilder.FieldEntry> fields =
-            ((VariantObjectConverter) converters[typedValueIdx]).getFields();
 
+        // Copy needed to satisfy compiler due to lambda.
+        ArrayList<VariantBuilder.FieldEntry> finalFields = fields;
         VariantUtil.handleObject(value, 0, (info) -> {
           for (int i = 0; i < info.numElements; ++i) {
             int id = VariantUtil.readUnsigned(value, info.idStart + info.idSize * i, info.idSize);
@@ -310,18 +314,15 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
                 value, info.offsetStart + info.offsetSize * i, info.offsetSize);
             int elementPos = info.dataStart + offset;
             String key = VariantUtil.getMetadataKey(this.builder.getMetadata().getBytes(), id);
-            fields.add(new VariantBuilder.FieldEntry(key, id, builder.getWritePos() - startWritePos));
+            finalFields.add(new VariantBuilder.FieldEntry(key, id, builder.getWritePos() - startWritePos));
             builder.shallowAppendVariant(value, elementPos);
           }
           return null;
         });
-        builder.finishWritingObject(startWritePos, fields);
+        builder.finishWritingObject(startWritePos, finalFields);
       }
-    } else if (typedValueIsObject && startWritePos != builder.getWritePos()) {
+    } else if (typedValueIsObject && fields != null) {
       // We wrote an object, and there's nothing left to append.
-      ArrayList<VariantBuilder.FieldEntry> fields =
-          ((VariantObjectConverter) converters[typedValueIdx]).getFields();
-
       builder.finishWritingObject(startWritePos, fields);
     }
 
@@ -726,6 +727,7 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
   private VariantBuilderHolder builder;
   private VariantElementConverter[] converters;
   private ArrayList<VariantBuilder.FieldEntry> fieldEntries = new ArrayList<>();
+  private boolean hasValue = false;
 
   public VariantObjectConverter(GroupType typed_value) {
     List<Type> fields = typed_value.getFields();
@@ -741,8 +743,13 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
     fieldEntries.add(entry);
   }
 
-  // Return fieldEntries. May only be called once.
-  ArrayList<VariantBuilder.FieldEntry> getFields() {
+  // Return fieldEntries, and reset the the state for reading the next object.
+  // If there was no object, return null.
+  ArrayList<VariantBuilder.FieldEntry> getFieldsAndReset() {
+    if (!hasValue) {
+      return null;
+    }
+    hasValue = false;
     return fieldEntries;
   }
 
@@ -768,6 +775,8 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
   public void end() {
     // We can't finish writing the object here, because there might be residual entries in our
     // parent's value column. The parent converter calls getFields to finalize the object.
+    // However, we need to indicate to our parent that the object is non-null.
+    hasValue = true;
   }
 }
 

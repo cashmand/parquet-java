@@ -107,7 +107,7 @@ public class TestVariant extends DirectWriterTest {
       };
 
   private byte[] EMPTY_METADATA = PRIMITIVES[0].getMetadata();
-  private byte[] NULL_VALUE = PRIMITIVES[0].getValue();
+  private Variant NULL_VALUE = PRIMITIVES[0];
 
   @Test
   public void testUnshredded() throws Exception {
@@ -498,11 +498,12 @@ public class TestVariant extends DirectWriterTest {
   // We need to store two copies of the schema: one without the Variant type annotation that is used to construct the
   // Avro schema for writing, and one with type annotation that is used in the actual written parquet schema, and when
   // reading.
-  private class TestSchema {
+  private static class TestSchema {
     MessageType parquetSchema;
     MessageType unannotatedParquetSchema;
     GroupType variantType;
     GroupType unannotatedVariantType;
+
     TestSchema(Type shreddedType) {
       variantType = variant("var", 2, shreddedType);
       unannotatedVariantType = unannotatedVariant("var", 2, shreddedType);
@@ -538,8 +539,7 @@ public class TestVariant extends DirectWriterTest {
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
-      Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
+      assertEquivalent(v, actualVariant);
     }
   }
 
@@ -556,8 +556,7 @@ public class TestVariant extends DirectWriterTest {
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
-      Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
+      assertEquivalent(v, actualVariant);
     }
   }
 
@@ -577,6 +576,7 @@ public class TestVariant extends DirectWriterTest {
                   "metadata",
                   v.getMetadata(),
                   "typed_value",
+                  // TODO: See Ryan's comment: have the test case code produce both the value and variant equivalent.
                   toAvroValue(v)));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
@@ -584,8 +584,7 @@ public class TestVariant extends DirectWriterTest {
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      Assert.assertEquals(ByteBuffer.wrap(v.getValue()), (ByteBuffer) actualVariant.get("value"));
-      Assert.assertEquals(ByteBuffer.wrap(v.getMetadata()), (ByteBuffer) actualVariant.get("metadata"));
+      assertEquivalent(v, actualVariant);
     }
   }
 
@@ -601,8 +600,7 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    Assert.assertEquals(ByteBuffer.wrap(NULL_VALUE), (ByteBuffer) actualVariant.get("value"));
-    Assert.assertEquals(ByteBuffer.wrap(EMPTY_METADATA), (ByteBuffer) actualVariant.get("metadata"));
+    assertEquivalent(NULL_VALUE, actualVariant);
   }
 
   @Test
@@ -635,8 +633,7 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    Assert.assertEquals(ByteBuffer.wrap(variant(b -> b.appendLong(34)).getValue()), (ByteBuffer) actualVariant.get("value"));
-    Assert.assertEquals(ByteBuffer.wrap(EMPTY_METADATA), (ByteBuffer) actualVariant.get("metadata"));
+    assertEquivalent(variant(b -> b.appendLong(34)), actualVariant);
   }
 
   @Test
@@ -696,7 +693,7 @@ public class TestVariant extends DirectWriterTest {
     GroupType objectFields = objectFields(fieldA, fieldB);
     TestSchema schema = new TestSchema(objectFields);
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", serialize(NULL_VALUE)));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", serialize(NULL_VALUE.getValue())));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", ""));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -706,12 +703,113 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord actual = writeAndRead(schema, record);
     Assert.assertEquals(actual.get("id"), 1);
 
-    byte[] expectedValue = VariantBuilder.parseJson(
-        "{\"a\": null, \"b\": \"\"}").getValue();
+    Variant expectedValue = VariantBuilder.parseJson(
+        "{\"a\": null, \"b\": \"\"}");
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    Assert.assertEquals(ByteBuffer.wrap(TEST_METADATA), actualVariant.get("metadata"));
-    Assert.assertEquals(ByteBuffer.wrap(expectedValue), actualVariant.get("value"));
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testShreddedObjectMissingValueColumn() throws IOException {
+    // TODO: Build this at class level, without parseJson, need to deal with exception.
+    byte[] TEST_METADATA = VariantBuilder.parseJson(
+        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
+
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    GroupType variantType = Types.buildGroup(Type.Repetition.REQUIRED)
+        .id(2)
+        .as(LogicalTypeAnnotation.variantType((byte) 1))
+        .required(PrimitiveTypeName.BINARY)
+        .named("metadata")
+        .addField(objectFields)
+        .named("var");
+
+    GroupType unannotatedVariantType = Types.buildGroup(Type.Repetition.REQUIRED)
+        .id(2)
+        .required(PrimitiveTypeName.BINARY)
+        .named("metadata")
+        .addField(objectFields)
+        .named("var");
+
+    MessageType parquetSchema = parquetSchema(variantType);
+    MessageType unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
+    TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value",
+      variant(b -> b.appendLong(1234)).getValue()));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = VariantBuilder.parseJson(
+        "{\"a\": 1234, \"b\": \"iceberg\"}");
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testShreddedObjectMissingField() throws IOException {
+    // TODO: Build this at class level, without parseJson, need to deal with exception.
+    byte[] TEST_METADATA = VariantBuilder.parseJson(
+        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA,
+        ImmutableMap.of("value", variant(b -> b.appendBoolean(false)).getValue()));
+    // value and typed_value are null, but a struct for b is required
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of());
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = VariantBuilder.parseJson(
+        "{\"a\": false}");
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testEmptyShreddedObject() throws IOException {
+    byte[] TEST_METADATA = VariantBuilder.parseJson(
+        "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of()); // missing
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of()); // missing
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = VariantBuilder.parseJson("{}");
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
   }
 
   /**
@@ -953,6 +1051,7 @@ public class TestVariant extends DirectWriterTest {
     return Types.optional(primitive).as(annotation).named("typed_value");
   }
 
+  // TODO: can probably remove this and all callers of it.
   private static ByteBuffer serialize(byte[] bytes) {
     return ByteBuffer.wrap(bytes);
   }
@@ -1058,6 +1157,18 @@ public class TestVariant extends DirectWriterTest {
         throw e;
       }
     }
+  }
+
+  // Assert that metadata contains identical bytes to expected, and value is logically equivalent.
+  // E.g. object fields may be ordered differently in the binary.
+  void assertEquivalent(byte[] expectedMetadata, byte[] expectedValue, GenericRecord actual) {
+    Assert.assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
+    // TODO: Implement logical equivalence check.
+    Assert.assertEquals(ByteBuffer.wrap(expectedValue), (ByteBuffer) actual.get("value"));
+  }
+
+  void assertEquivalent(Variant expected, GenericRecord actual) {
+    assertEquivalent(expected.getMetadata(), expected.getValue(), actual);
   }
 
 }
