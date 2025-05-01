@@ -28,6 +28,7 @@ import java.nio.ByteOrder;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 import com.google.common.collect.ImmutableMap;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -78,6 +79,18 @@ public class TestVariant extends DirectWriterTest {
     return builder.valueWithoutMetadata();
   }
 
+  private static byte[] variant(int val) {
+    return variant(b -> b.appendLong(val));
+  }
+
+  private static byte[] variant(long val) {
+    return variant(b -> b.appendLong(val));
+  }
+
+  private static byte[] variant(String s) {
+    return variant(b -> b.appendString(s));
+  }
+
   private static final byte[][] PRIMITIVES =
       new byte[][] {
           variant(b -> b.appendNull()),
@@ -125,6 +138,18 @@ public class TestVariant extends DirectWriterTest {
   private byte[] TEST_METADATA;
   private byte[] TEST_OBJECT;
 
+  private static class TestCase {
+    byte[] value;
+    byte[] metadata;
+
+    public TestCase(byte[] value, byte[] metadata) {
+      this.value = value;
+      this.metadata = metadata;
+    }
+  }
+
+  private ArrayList<TestCase> testCases;
+
   public TestVariant() throws Exception {
     TEST_METADATA = VariantBuilder.parseJson(
         "{\"a\": 0, \"b\": 0, \"c\": 0, \"d\": 0, \"e\": 0}").getMetadata();
@@ -138,6 +163,12 @@ public class TestVariant extends DirectWriterTest {
       b.appendString("iceberg");
       b.finishWritingObject(startWritePos, entries);
     });
+
+    testCases = new ArrayList<>();
+    for (byte[] p : PRIMITIVES) {
+      testCases.add(new TestCase(p, EMPTY_METADATA));
+    }
+    testCases.add(new TestCase(TEST_OBJECT, TEST_METADATA));
   }
 
   @Test
@@ -557,37 +588,37 @@ public class TestVariant extends DirectWriterTest {
     }
   }
 
-  // The following tests are based on Iceberg's TestVariantReaders suite.
+  // The remaining tests in this file are based on Iceberg's TestVariantReaders suite.
   @Test
   public void testUnshreddedVariants() throws Exception {
-    for (byte[] v : PRIMITIVES) {
+    for (TestCase t : testCases) {
       TestSchema schema = new TestSchema();
 
       GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
-          ImmutableMap.of("metadata", serialize(EMPTY_METADATA), "value", v));
+          ImmutableMap.of("metadata", t.metadata, "value", t.value));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      assertEquivalent(EMPTY_METADATA, v, actualVariant);
+      assertEquivalent(t.metadata, t.value, actualVariant);
     }
   }
 
   @Test
   public void testUnshreddedVariantsWithShreddingSchema() throws Exception {
-    for (byte[] v : PRIMITIVES) {
+    for (TestCase t : testCases) {
       // Parquet schema has a shredded field, but it is unused by the data.
       TestSchema schema = new TestSchema(shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
 
       GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
-          ImmutableMap.of("metadata", serialize(EMPTY_METADATA), "value", v));
+          ImmutableMap.of("metadata", t.metadata, "value", t.value));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      assertEquivalent(EMPTY_METADATA, v, actualVariant);
+      assertEquivalent(t.metadata, t.value, actualVariant);
     }
   }
 
@@ -664,7 +695,7 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(EMPTY_METADATA, variant(b -> b.appendLong(34)), actualVariant);
+    assertEquivalent(EMPTY_METADATA, variant(34), actualVariant);
   }
 
   @Test
@@ -678,7 +709,7 @@ public class TestVariant extends DirectWriterTest {
                 "metadata",
                 EMPTY_METADATA,
                 "value",
-                variant(b -> b.appendString("str")),
+                variant("str"),
                 "typed_value",
                 34));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
@@ -720,7 +751,7 @@ public class TestVariant extends DirectWriterTest {
     GroupType objectFields = objectFields(fieldA, fieldB);
     TestSchema schema = new TestSchema(objectFields);
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", serialize(NULL_VALUE)));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", ""));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -762,7 +793,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
 
     GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value",
-      variant(b -> b.appendLong(1234))));
+      variant(1234)));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -888,7 +919,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(objectFields);
 
     GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of()); // value=null
-    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendString("iceberg"))));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant("iceberg")));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
         recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
@@ -988,7 +1019,7 @@ public class TestVariant extends DirectWriterTest {
             .named("typed_value");
     TestSchema schema = new TestSchema(objectFields);
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", variant(b -> b.appendLong(34))));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", variant(34)));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
     GenericRecord recordC = recordFromMap(fieldC, ImmutableMap.of()); // c.value and c.typed_value are missing
     GenericRecord fields =
@@ -1040,7 +1071,7 @@ public class TestVariant extends DirectWriterTest {
                 "metadata",
                 TEST_METADATA,
                 "value",
-                serialize(baseObject),
+                baseObject,
                 "typed_value",
                 fields));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
@@ -1164,14 +1195,14 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord variant =
         recordFromMap(
             schema.unannotatedVariantType,
-            ImmutableMap.of("metadata", TEST_METADATA, "value", variant(b -> b.appendLong(34))));
+            ImmutableMap.of("metadata", TEST_METADATA, "value", variant(34)));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, variant(b -> b.appendLong(34)), actualVariant);
+    assertEquivalent(TEST_METADATA, variant(34), actualVariant);
   }
 
   @Test
@@ -1182,7 +1213,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(objectFields);
 
     GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE));
-    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendLong(9876543210L))));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(9876543210L)));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
         recordFromMap(
@@ -1191,7 +1222,7 @@ public class TestVariant extends DirectWriterTest {
                 "metadata",
                 TEST_METADATA,
                 "value",
-                variant(b -> b.appendLong(34)),
+                variant(34),
                 "typed_value",
                 fields));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
@@ -1262,7 +1293,7 @@ public class TestVariant extends DirectWriterTest {
       b.finishWritingObject(startWritePos, outerEntries);
     });
 
-    GenericRecord c2 = recordFromMap(fieldC, ImmutableMap.of("value", variant(b -> b.appendLong(8))));
+    GenericRecord c2 = recordFromMap(fieldC, ImmutableMap.of("value", variant(8)));
     GenericRecord d2 = recordFromMap(fieldD, ImmutableMap.of("typed_value", -0.0D));
     GenericRecord outer2 = recordFromMap(outerFields, ImmutableMap.of("c", c2, "d", d2));
     GenericRecord variant2 =
@@ -1280,7 +1311,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord a3 = recordFromMap(fieldA, ImmutableMap.of("typed_value", 34));
-    GenericRecord b3 = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendString(""))));
+    GenericRecord b3 = recordFromMap(fieldB, ImmutableMap.of("value", variant("")));
     GenericRecord inner3 = recordFromMap(innerFields, ImmutableMap.of("a", a3, "b", b3));
     GenericRecord c3 = recordFromMap(fieldC, ImmutableMap.of("typed_value", inner3));
     GenericRecord d3 = recordFromMap(fieldD, ImmutableMap.of("typed_value", 0.0D));
@@ -1652,10 +1683,10 @@ public class TestVariant extends DirectWriterTest {
         recordFromMap(
             schema.unannotatedVariantType,
             ImmutableMap.of(
-                "metadata", EMPTY_METADATA, "value", variant(b -> b.appendLong(34))));
+                "metadata", EMPTY_METADATA, "value", variant(34)));
     GenericRecord row2 = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 2, "var", var2));
 
-    byte[] expectedValue2 = variant(b -> b.appendLong(34));
+    byte[] expectedValue2 = variant(34);
 
     GenericRecord var3 =
         recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "value", TEST_OBJECT));
@@ -1834,7 +1865,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(list(elementType));
 
     GenericRecord element =
-        recordFromMap(elementType, ImmutableMap.of("value", variant(b -> b.appendLong(3)), "typed_value", "comedy"));
+        recordFromMap(elementType, ImmutableMap.of("value", variant(3), "typed_value", "comedy"));
     GenericRecord variant =
         recordFromMap(
             schema.unannotatedVariantType,
@@ -2006,7 +2037,6 @@ public class TestVariant extends DirectWriterTest {
           return v.getDecimal().unscaledValue().toByteArray();
         }
       case DATE:
-        // TODO: Replace getInt and getLong with appropriate types.
         return v.getInt();
       case TIMESTAMP:
         return v.getLong();
@@ -2097,11 +2127,6 @@ public class TestVariant extends DirectWriterTest {
   private static Type shreddedPrimitive(
       PrimitiveTypeName primitive, LogicalTypeAnnotation annotation) {
     return Types.optional(primitive).as(annotation).named("typed_value");
-  }
-
-  // TODO: can probably remove this and all callers of it.
-  private static ByteBuffer serialize(byte[] bytes) {
-    return ByteBuffer.wrap(bytes);
   }
 
   /** Creates an Avro record from a map of field name to value. */
