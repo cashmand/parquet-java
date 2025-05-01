@@ -895,6 +895,157 @@ public class TestVariant extends DirectWriterTest {
     assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
   }
 
+  @Test
+  public void testShreddedObjectWithinShreddedObject() throws IOException {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType innerFields = objectFields(fieldA, fieldB);
+    GroupType fieldC = shreddedField("c", innerFields);
+    GroupType fieldD = shreddedField("d", shreddedPrimitive(PrimitiveTypeName.DOUBLE));
+    GroupType outerFields = objectFields(fieldC, fieldD);
+    TestSchema schema = new TestSchema(outerFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("typed_value", 34));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord inner = recordFromMap(innerFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord recordC = recordFromMap(fieldC, ImmutableMap.of("typed_value", inner));
+    GenericRecord recordD = recordFromMap(fieldD, ImmutableMap.of("typed_value", -0.0D));
+    GenericRecord outer = recordFromMap(outerFields, ImmutableMap.of("c", recordC, "d", recordD));
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", outer));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> outerEntries = new ArrayList<>();
+
+      outerEntries.add(new VariantBuilder.FieldEntry("c", 2, b.getWritePos() - startWritePos));
+      ArrayList<VariantBuilder.FieldEntry> innerEntries = new ArrayList<>();
+      innerEntries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendLong(34);
+      innerEntries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      b.finishWritingObject(startWritePos, innerEntries);
+
+      outerEntries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
+      b.appendDouble(-0.0D);
+      b.finishWritingObject(startWritePos, outerEntries);
+    });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testShreddedObjectWithOptionalFieldStructs() throws IOException {
+    // fields use an incorrect OPTIONAL struct of value and typed_value to test definition levels
+    GroupType fieldA =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .optional(PrimitiveTypeName.BINARY)
+            .named("value")
+            .addField(shreddedPrimitive(PrimitiveTypeName.INT32))
+            .named("a");
+    GroupType fieldB =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .optional(PrimitiveTypeName.BINARY)
+            .named("value")
+            .addField(shreddedPrimitive(PrimitiveTypeName.BINARY, STRING))
+            .named("b");
+    GroupType fieldC =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .optional(PrimitiveTypeName.BINARY)
+            .named("value")
+            .addField(shreddedPrimitive(PrimitiveTypeName.DOUBLE))
+            .named("c");
+    GroupType fieldD =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .optional(PrimitiveTypeName.BINARY)
+            .named("value")
+            .addField(shreddedPrimitive(PrimitiveTypeName.BOOLEAN))
+            .named("d");
+    GroupType objectFields =
+        Types.buildGroup(Type.Repetition.OPTIONAL)
+            .addFields(fieldA, fieldB, fieldC, fieldD)
+            .named("typed_value");
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", variant(b -> b.appendLong(34)).getValue()));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord recordC = recordFromMap(fieldC, ImmutableMap.of()); // c.value and c.typed_value are missing
+    GenericRecord fields =
+        recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB, "c", recordC)); // d is missing
+    GenericRecord variant =
+        recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Variant expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendLong(34);
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testPartiallyShreddedObject() throws IOException {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    byte[] baseObject = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      b.finishWritingObject(startWritePos, entries);
+    }).getValue();
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                TEST_METADATA,
+                "value",
+                serialize(baseObject),
+                "typed_value",
+                fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Variant expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendNull();
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      entries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
   /**
    * This is a custom Parquet writer builder that injects a specific Parquet schema and then uses
    * the Avro object model. This ensures that the Parquet file's schema is exactly what was passed.
