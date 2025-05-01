@@ -51,6 +51,7 @@ import org.apache.parquet.schema.LogicalTypeAnnotation.TimeUnit;
 import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName;
 import org.apache.parquet.variant.Variant;
 import org.apache.parquet.variant.VariantBuilder;
+import org.apache.parquet.variant.VariantDuplicateKeyException;
 import org.apache.parquet.variant.VariantUtil;
 import org.junit.Assert;
 import org.junit.Test;
@@ -984,6 +985,8 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
+    Assert.assertEquals(actual.get("id"), 1);
+
     Variant expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
@@ -1030,6 +1033,8 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
+    Assert.assertEquals(actual.get("id"), 1);
+
     Variant expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
@@ -1044,6 +1049,142 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testPartiallyShreddedObjectFieldConflict() throws IOException {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    byte[] baseObject = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      b.finishWritingObject(startWritePos, entries);
+    }).getValue();
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                TEST_METADATA,
+                "value",
+                baseObject,
+                "typed_value",
+                fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    // Note: Iceberg does not fail in this case, and uses the value from `typed_value`.
+    assertThrows(() -> writeAndRead(schema, record),
+        VariantDuplicateKeyException.class,
+        "Failed to build Variant because of duplicate object key: b");
+  }
+
+  @Test
+  public void testPartiallyShreddedObjectMissingFieldConflict() throws IOException {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    byte[] baseObject = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      b.finishWritingObject(startWritePos, entries);
+    }).getValue();
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    // value and typed_value are null, but a struct for b is required
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of());
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                TEST_METADATA,
+                "value",
+                baseObject,
+                "typed_value",
+                fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    Variant expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendNull();
+      // TODO: This documents the current behaviour, but isn't necessarily what we want: it's probably better to
+      // either fail with an error here, or use the value from typed_value (i.e. treat b as missing). Iceberg does
+      // the latter. I think doing either one in Parquet would require adding a map lookup for every key we add
+      // from the residual value, and skipping or throwing if it's already a field in typed_value.
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+  }
+
+  @Test
+  public void testNonObjectWithNullShreddedFields() throws IOException {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of("metadata", TEST_METADATA, "value", variant(b -> b.appendLong(34)).getValue()));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+    Assert.assertEquals(actual.get("id"), 1);
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, variant(b -> b.appendLong(34)).getValue(), actualVariant);
+  }
+
+  @Test
+  public void testNonObjectWithNonNullShreddedFields() {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendLong(9876543210L)).getValue()));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                TEST_METADATA,
+                "value",
+                variant(b -> b.appendLong(34)).getValue(),
+                "typed_value",
+                fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    assertThrows(() -> writeAndRead(schema, record),
+        IllegalArgumentException.class,
+        "Invalid variant, conflicting value and typed_value");
   }
 
   /**
