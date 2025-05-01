@@ -292,7 +292,8 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
       variantValue = ((VariantValueConverter) converters[valueIdx]).getValue();
     }
     if (variantValue != null) {
-      if (startWritePos == builder.getWritePos()) {
+      // The second check is needed to handle the case of an empty object, which won't change write position.
+      if (startWritePos == builder.getWritePos() && fields == null) {
         // Nothing else was added. We can directly append this value.
         builder.shallowAppendVariant(
             variantValue.toByteBuffer().array(),

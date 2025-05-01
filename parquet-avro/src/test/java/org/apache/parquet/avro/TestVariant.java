@@ -1192,6 +1192,33 @@ public class TestVariant extends DirectWriterTest {
         "Invalid variant, conflicting value and typed_value");
   }
 
+  @Test
+  public void testEmptyPartiallyShreddedObjectConflict() {
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldA, fieldB);
+    TestSchema schema = new TestSchema(objectFields);
+
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of()); // missing
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of()); // missing
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                TEST_METADATA,
+                "value",
+                NULL_VALUE, // conflicting non-object
+                "typed_value",
+                fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    assertThrows(() -> writeAndRead(schema, record),
+        IllegalArgumentException.class,
+        "Invalid variant, conflicting value and typed_value");
+  }
+
   /**
    * This is a custom Parquet writer builder that injects a specific Parquet schema and then uses
    * the Avro object model. This ensures that the Parquet file's schema is exactly what was passed.
