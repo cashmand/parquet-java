@@ -100,7 +100,7 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
   // startWritePos has two uses:
   // 1) If typed_value is an object, we gather fields from value and typed_value and write the final
   // object in end(), so we need to remember the start position.
-  // 2) If this is the field of an object, we use startWritePos to tell out parent the field's
+  // 2) If this is the field of an object, we use startWritePos to tell our parent the field's
   // offset within the encoded parent object.
   private int startWritePos;
   private boolean typedValueIsObject = false;
@@ -340,7 +340,7 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
         objectFieldId = builder.addKey(objectFieldName);
       }
       // Record that we added a field.
-      parent.addField(new VariantBuilder.FieldEntry(objectFieldName, objectFieldId, startWritePos));
+      parent.addField(objectFieldName, objectFieldId, startWritePos);
     }
   }
 }
@@ -729,6 +729,8 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
   private VariantElementConverter[] converters;
   private ArrayList<VariantBuilder.FieldEntry> fieldEntries = new ArrayList<>();
   private boolean hasValue = false;
+  // The write position in the buffer for the start of this object.
+  private int startWritePos;
 
   public VariantObjectConverter(GroupType typed_value) {
     List<Type> fields = typed_value.getFields();
@@ -740,8 +742,8 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
     }
   };
 
-  void addField(VariantBuilder.FieldEntry entry) {
-    fieldEntries.add(entry);
+  void addField(String fieldName, int fieldId, int fieldStartPos) {
+    fieldEntries.add(new VariantBuilder.FieldEntry(fieldName, fieldId, fieldStartPos - startWritePos));
   }
 
   // Return fieldEntries, and reset the the state for reading the next object.
@@ -770,6 +772,7 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
   @Override
   public void start() {
     fieldEntries.clear();
+    startWritePos = builder.builder.getWritePos();
   }
 
   @Override
