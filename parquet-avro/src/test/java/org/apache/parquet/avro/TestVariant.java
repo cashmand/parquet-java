@@ -60,23 +60,28 @@ public class TestVariant extends DirectWriterTest {
 
   private static final LogicalTypeAnnotation STRING = LogicalTypeAnnotation.stringType();
 
-  // Construct a variant. E.g. variant(b -> b.appendBoolean(true))
-  private static Variant variant(Consumer<VariantBuilder> appendValue) {
+  // Construct a variant, and return the value binary, dropping metadata.
+  private static Variant fullVariant(Consumer<VariantBuilder> appendValue) {
     VariantBuilder builder = new VariantBuilder(false);
     appendValue.accept(builder);
     return builder.result();
   }
 
-  // Returns a Variant value based on buildling with fixed metadata.
-  private static Variant variant(byte[] metadata, Consumer<VariantBuilder> appendValue) {
+  // Return only the byte[], which is usually all we want.
+  private static byte[] variant(Consumer<VariantBuilder> appendValue) {
+    return fullVariant(appendValue).getValue();
+  }
+
+  // Returns a value based on building with fixed metadata.
+  private static byte[] variant(byte[] metadata, Consumer<VariantBuilder> appendValue) {
     VariantBuilder builder = new VariantBuilder(false);
     builder.setFixedMetadata(VariantUtil.getMetadataMap(metadata));
     appendValue.accept(builder);
-    return new Variant(builder.valueWithoutMetadata(), metadata);
+    return builder.valueWithoutMetadata();
   }
 
-  private static final Variant[] PRIMITIVES =
-      new Variant[] {
+  private static final byte[][] PRIMITIVES =
+      new byte[][] {
           variant(b -> b.appendNull()),
           variant(b -> b.appendBoolean(true)),
           variant(b -> b.appendBoolean(false)),
@@ -116,8 +121,8 @@ public class TestVariant extends DirectWriterTest {
           variant(b -> b.appendUUID(UUID.fromString("f24f9b64-81fa-49d1-b74e-8c09a6e31c56")))
       };
 
-  private byte[] EMPTY_METADATA = PRIMITIVES[0].getMetadata();
-  private Variant NULL_VALUE = PRIMITIVES[0];
+  private byte[] EMPTY_METADATA = fullVariant(b -> b.appendNull()).getMetadata();
+  private byte[] NULL_VALUE = PRIMITIVES[0];
 
   private byte[] TEST_METADATA;
 
@@ -546,62 +551,62 @@ public class TestVariant extends DirectWriterTest {
   // The following tests are based on Iceberg's TestVariantReaders suite.
   @Test
   public void testUnshreddedVariants() throws Exception {
-    for (Variant v : PRIMITIVES) {
+    for (byte[] v : PRIMITIVES) {
       TestSchema schema = new TestSchema();
 
       GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
-          ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
+          ImmutableMap.of("metadata", serialize(EMPTY_METADATA), "value", v));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      assertEquivalent(v, actualVariant);
+      assertEquivalent(EMPTY_METADATA, v, actualVariant);
     }
   }
 
   @Test
   public void testUnshreddedVariantsWithShreddingSchema() throws Exception {
-    for (Variant v : PRIMITIVES) {
+    for (byte[] v : PRIMITIVES) {
       // Parquet schema has a shredded field, but it is unused by the data.
       TestSchema schema = new TestSchema(shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
 
       GenericRecord variant = recordFromMap(schema.unannotatedVariantType,
-          ImmutableMap.of("metadata", serialize(v.getMetadata()), "value", serialize(v.getValue())));
+          ImmutableMap.of("metadata", serialize(EMPTY_METADATA), "value", v));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      assertEquivalent(v, actualVariant);
+      assertEquivalent(EMPTY_METADATA, v, actualVariant);
     }
   }
 
   @Test
   public void testShreddedVariantPrimitives() throws IOException {
-    for (Variant v : PRIMITIVES) {
-      if (v.getType() == VariantUtil.Type.NULL) {
+    for (byte[] v : PRIMITIVES) {
+      if (v.equals(NULL_VALUE)) {
         // NULL isn't a valid type for shredding.
         continue;
       }
-      TestSchema schema = new TestSchema(shreddedType(v));
+      TestSchema schema = new TestSchema(shreddedType(new Variant(v, EMPTY_METADATA)));
 
       GenericRecord variant =
           recordFromMap(
               schema.unannotatedVariantType,
               ImmutableMap.of(
                   "metadata",
-                  v.getMetadata(),
+                  EMPTY_METADATA,
                   "typed_value",
                   // TODO: See Ryan's comment: have the test case code produce both the value and variant equivalent.
-                  toAvroValue(v)));
+                  toAvroValue(new Variant(v, EMPTY_METADATA))));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
       GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      assertEquivalent(v, actualVariant);
+      assertEquivalent(EMPTY_METADATA, v, actualVariant);
     }
   }
 
@@ -617,7 +622,7 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(NULL_VALUE, actualVariant);
+    assertEquivalent(EMPTY_METADATA, NULL_VALUE, actualVariant);
   }
 
   @Test
@@ -650,7 +655,7 @@ public class TestVariant extends DirectWriterTest {
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(variant(b -> b.appendLong(34)), actualVariant);
+    assertEquivalent(EMPTY_METADATA, variant(b -> b.appendLong(34)), actualVariant);
   }
 
   @Test
@@ -664,7 +669,7 @@ public class TestVariant extends DirectWriterTest {
                 "metadata",
                 EMPTY_METADATA,
                 "value",
-                variant(b -> b.appendString("str")).getValue(),
+                variant(b -> b.appendString("str")),
                 "typed_value",
                 34));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
@@ -706,7 +711,7 @@ public class TestVariant extends DirectWriterTest {
     GroupType objectFields = objectFields(fieldA, fieldB);
     TestSchema schema = new TestSchema(objectFields);
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", serialize(NULL_VALUE.getValue())));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", serialize(NULL_VALUE)));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", ""));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -748,7 +753,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
 
     GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value",
-      variant(b -> b.appendLong(1234)).getValue()));
+      variant(b -> b.appendLong(1234))));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -773,7 +778,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(objectFields);
 
     GenericRecord recordA = recordFromMap(fieldA,
-        ImmutableMap.of("value", variant(b -> b.appendBoolean(false)).getValue()));
+        ImmutableMap.of("value", variant(b -> b.appendBoolean(false))));
     // value and typed_value are null, but a struct for b is required
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of());
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
@@ -843,7 +848,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
-    Variant expectedValue = variant(TEST_METADATA, b -> {
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
             int startWritePos = b.getWritePos();
             ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
             entries.add(new VariantBuilder.FieldEntry("b", 1, 0));
@@ -852,7 +857,7 @@ public class TestVariant extends DirectWriterTest {
       });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
 
@@ -874,7 +879,7 @@ public class TestVariant extends DirectWriterTest {
     TestSchema schema = new TestSchema(objectFields);
 
     GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of()); // value=null
-    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendString("iceberg")).getValue()));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendString("iceberg"))));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
         recordFromMap(schema.unannotatedVariantType, ImmutableMap.of("metadata", TEST_METADATA, "typed_value", fields));
@@ -884,7 +889,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
-    Variant expectedValue = variant(TEST_METADATA, b -> {
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
       entries.add(new VariantBuilder.FieldEntry("b", 1, 0));
@@ -893,7 +898,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
   @Test
@@ -920,7 +925,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
-    Variant expectedValue = variant(TEST_METADATA, b -> {
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> outerEntries = new ArrayList<>();
 
@@ -938,7 +943,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
   @Test
@@ -974,7 +979,7 @@ public class TestVariant extends DirectWriterTest {
             .named("typed_value");
     TestSchema schema = new TestSchema(objectFields);
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", variant(b -> b.appendLong(34)).getValue()));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", variant(b -> b.appendLong(34))));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
     GenericRecord recordC = recordFromMap(fieldC, ImmutableMap.of()); // c.value and c.typed_value are missing
     GenericRecord fields =
@@ -987,7 +992,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
-    Variant expectedValue = variant(TEST_METADATA, b -> {
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
       entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
@@ -998,7 +1003,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
   @Test
@@ -1014,9 +1019,9 @@ public class TestVariant extends DirectWriterTest {
       entries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
       b.appendDate(12345);
       b.finishWritingObject(startWritePos, entries);
-    }).getValue();
+    });
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -1035,7 +1040,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
-    Variant expectedValue = variant(TEST_METADATA, b -> {
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
       entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
@@ -1048,7 +1053,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
   @Test
@@ -1064,9 +1069,9 @@ public class TestVariant extends DirectWriterTest {
       entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
       b.appendDate(12345);
       b.finishWritingObject(startWritePos, entries);
-    }).getValue();
+    });
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE));
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("typed_value", "iceberg"));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
@@ -1100,9 +1105,9 @@ public class TestVariant extends DirectWriterTest {
       entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
       b.appendDate(12345);
       b.finishWritingObject(startWritePos, entries);
-    }).getValue();
+    });
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE));
     // value and typed_value are null, but a struct for b is required
     GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of());
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
@@ -1122,7 +1127,7 @@ public class TestVariant extends DirectWriterTest {
 
     Assert.assertEquals(actual.get("id"), 1);
 
-    Variant expectedValue = variant(TEST_METADATA, b -> {
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
       entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
@@ -1137,7 +1142,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, expectedValue.getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
   @Test
@@ -1150,14 +1155,14 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord variant =
         recordFromMap(
             schema.unannotatedVariantType,
-            ImmutableMap.of("metadata", TEST_METADATA, "value", variant(b -> b.appendLong(34)).getValue()));
+            ImmutableMap.of("metadata", TEST_METADATA, "value", variant(b -> b.appendLong(34))));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
     Assert.assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
-    assertEquivalent(TEST_METADATA, variant(b -> b.appendLong(34)).getValue(), actualVariant);
+    assertEquivalent(TEST_METADATA, variant(b -> b.appendLong(34)), actualVariant);
   }
 
   @Test
@@ -1167,8 +1172,8 @@ public class TestVariant extends DirectWriterTest {
     GroupType objectFields = objectFields(fieldA, fieldB);
     TestSchema schema = new TestSchema(objectFields);
 
-    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE.getValue()));
-    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendLong(9876543210L)).getValue()));
+    GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value", NULL_VALUE));
+    GenericRecord recordB = recordFromMap(fieldB, ImmutableMap.of("value", variant(b -> b.appendLong(9876543210L))));
     GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("a", recordA, "b", recordB));
     GenericRecord variant =
         recordFromMap(
@@ -1177,7 +1182,7 @@ public class TestVariant extends DirectWriterTest {
                 "metadata",
                 TEST_METADATA,
                 "value",
-                variant(b -> b.appendLong(34)).getValue(),
+                variant(b -> b.appendLong(34)),
                 "typed_value",
                 fields));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
@@ -1541,9 +1546,4 @@ public class TestVariant extends DirectWriterTest {
     // TODO: Implement logical equivalence check.
     Assert.assertEquals(ByteBuffer.wrap(expectedValue), (ByteBuffer) actual.get("value"));
   }
-
-  void assertEquivalent(Variant expected, GenericRecord actual) {
-    assertEquivalent(expected.getMetadata(), expected.getValue(), actual);
-  }
-
 }
