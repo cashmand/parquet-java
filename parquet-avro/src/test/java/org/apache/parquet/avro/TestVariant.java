@@ -306,7 +306,6 @@ public class TestVariant extends DirectWriterTest {
 
   @Test
   public void testShreddedScalar() throws Exception {
-    // TODO: Test VariantNull
     runOneScalarTest("boolean", "", b -> b.appendBoolean(true), rc -> rc.addBoolean(true));
     // Test true and false, since they have different types in Variant.
     runOneScalarTest("boolean", "", b -> b.appendBoolean(false), rc -> rc.addBoolean(false));
@@ -384,7 +383,6 @@ public class TestVariant extends DirectWriterTest {
 
     Binary expectedValue = Binary.fromConstantByteArray(testValue.getValue());
     Binary expectedMetadata = Binary.fromConstantByteArray(testValue.getMetadata());
-    // TODO: is there a better way to write this test? All the Start* and End* calls seem excessive.
     Path test = writeDirect(
         "message VariantMessage {" + "  required group v (VARIANT(1)) {"
             + "    required binary metadata;"
@@ -588,6 +586,13 @@ public class TestVariant extends DirectWriterTest {
     GroupType variantType;
     GroupType unannotatedVariantType;
 
+    TestSchema(GroupType variantType, GroupType unannotatedVariantType) {
+      this.variantType = variantType;
+      this.unannotatedVariantType = unannotatedVariantType;
+      this.parquetSchema = parquetSchema(variantType);
+      this.unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
+    }
+
     TestSchema(Type shreddedType) {
       variantType = variant("var", 2, shreddedType);
       unannotatedVariantType = unannotatedVariant("var", 2, shreddedType);
@@ -600,13 +605,6 @@ public class TestVariant extends DirectWriterTest {
       unannotatedVariantType = unannotatedVariant("var", 2);
       parquetSchema = parquetSchema(variantType);
       unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
-    }
-
-    TestSchema(GroupType variantType, GroupType unannotatedVariantType, MessageType parquetSchema, MessageType unannotatedParquetSchema) {
-      this.variantType = variantType;
-      this.unannotatedVariantType = unannotatedVariantType;
-      this.parquetSchema = parquetSchema;
-      this.unannotatedParquetSchema = unannotatedParquetSchema;
     }
   }
 
@@ -703,14 +701,12 @@ public class TestVariant extends DirectWriterTest {
             .named("metadata")
             .addField(shreddedPrimitive(PrimitiveTypeName.INT32))
             .named("var");
-    MessageType parquetSchema = parquetSchema(variantType);
-    MessageType unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
 
-    TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
+    TestSchema schema = new TestSchema(variantType, unannotatedVariantType);
 
     GenericRecord variant =
         recordFromMap(unannotatedVariantType, ImmutableMap.of("metadata", EMPTY_METADATA, "typed_value", 34));
-    GenericRecord record = recordFromMap(unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
     assertEquals(actual.get("id"), 1);
@@ -809,9 +805,7 @@ public class TestVariant extends DirectWriterTest {
         .addField(objectFields)
         .named("var");
 
-    MessageType parquetSchema = parquetSchema(variantType);
-    MessageType unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
-    TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
+    TestSchema schema = new TestSchema(variantType, unannotatedVariantType);
 
     GenericRecord recordA = recordFromMap(fieldA, ImmutableMap.of("value",
       variant(1234)));
@@ -851,7 +845,6 @@ public class TestVariant extends DirectWriterTest {
 
     assertEquals(actual.get("id"), 1);
 
-    // TODO: I want to make sure that the metadata IDs are the same, so I need to pre-populate the metadata.
     Variant expectedValue = VariantBuilder.parseJson(
         "{\"a\": false}");
 
@@ -1837,11 +1830,7 @@ public class TestVariant extends DirectWriterTest {
             .addField(list(elementType))
             .named("var");
 
-    // TODO: Can probably let TestSchema figure out parquetSchema for all these cases.
-    MessageType parquetSchema = parquetSchema(variantType);
-    MessageType unannotatedParquetSchema = parquetSchema(unannotatedVariantType);
-
-    TestSchema schema = new TestSchema(variantType, unannotatedVariantType, parquetSchema, unannotatedParquetSchema);
+    TestSchema schema = new TestSchema(variantType, unannotatedVariantType);
 
     List<GenericRecord> arr =
         Arrays.asList(
