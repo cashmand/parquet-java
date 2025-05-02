@@ -1192,10 +1192,24 @@ public class TestVariant extends DirectWriterTest {
                 fields));
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
-    // Note: Iceberg does not fail in this case, and uses the value from `typed_value`.
-    assertThrows(() -> writeAndRead(schema, record),
-        VariantDuplicateKeyException.class,
-        "Failed to build Variant because of duplicate object key: b");
+    GenericRecord actual = writeAndRead(schema, record);
+
+    assertEquals(actual.get("id"), 1);
+
+    // The reader is expected to ignore fields in value that are present in the typed_value schema.
+    // This matches Iceberg behaviour, but we could also consider failing with an error.
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendNull();
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
 
   @Test
@@ -1233,17 +1247,13 @@ public class TestVariant extends DirectWriterTest {
 
     assertEquals(actual.get("id"), 1);
 
+    // The reader is expected to ignore fields in value that are present in the typed_value schema, even if they are
+    // missing in typed_value.
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
       ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
       entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
       b.appendNull();
-      // TODO: This documents the current behaviour, but isn't necessarily what we want: it's probably better to
-      // either fail with an error here, or use the value from typed_value (i.e. treat b as missing). Iceberg does
-      // the latter. I think doing either one in Parquet would require adding a map lookup for every key we add
-      // from the residual value, and skipping or throwing if it's already a field in typed_value.
-      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
-      b.appendDate(12345);
       b.finishWritingObject(startWritePos, entries);
     });
 

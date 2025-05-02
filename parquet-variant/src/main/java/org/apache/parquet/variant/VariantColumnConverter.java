@@ -19,8 +19,6 @@
 package org.apache.parquet.variant;
 
 import static org.apache.parquet.schema.LogicalTypeAnnotation.TimeUnit.MICROS;
-import static org.apache.parquet.schema.LogicalTypeAnnotation.decimalType;
-import static org.apache.parquet.schema.LogicalTypeAnnotation.timestampType;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BINARY;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.BOOLEAN;
 import static org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName.DOUBLE;
@@ -31,9 +29,7 @@ import static org.apache.parquet.schema.Type.Repetition.REPEATED;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 import org.apache.parquet.column.Dictionary;
 import org.apache.parquet.io.api.Binary;
 import org.apache.parquet.io.api.Converter;
@@ -69,7 +65,7 @@ class VariantBuilderHolder {
    */
   void setMetadata(Binary metadata) {
     // If the metadata hasn't changed, we don't need to rebuild the map.
-    // When metaata is dictionary encoded, we could consider keeping the map
+    // When metadata is dictionary encoded, we could consider keeping the map
     // around for every dictionary value, but that could be expensive, and handling adjacent
     // rows with identical metadata should be the most common case.
     if (this.metadata != metadata) {
@@ -85,12 +81,15 @@ interface VariantConverter {
 }
 
 /**
- * Converter for shredded Variant.
- * The top-level converter is handled by a subclass that also reads metadata.
- * The GroupConverter's children are a value, typed_value, and (at the top levle) metadata.
- * value or typed_value may be absent.
+ * Converter for a shredded Variant containing a value and/or typed_value field: either a top-level
+ * Variant column, or a nested array element or object field.
+ * The top-level converter is handled by a subclass (VariantColumnConverter)  that also reads
+ * metadata.
  *
- * Values in `typed_value` are appended by the child converter. Values in `value` are stored by the
+ * All converters for a Variant column shared the same VariantBuilder, and append their results to
+ * it as values are read from Parquet.
+ *
+ * Values in `typed_value` are appended by the child converter. Values in `value` are stored by a
  * child converter, but only appended when completing this group. Additionally, object fields are
  * appended by the `typed_value` converter, but because residual values are stored in `value`, this
  * converter is responsible for finalizing the object.
@@ -113,6 +112,9 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
   private String objectFieldName = null;
   private int objectFieldId = -1;
   private VariantObjectConverter parent = null;
+
+  // Only used if typedValueIsObject is true.
+  private Set<String> shreddedObjectKeys;
 
   @Override
   public void init(VariantBuilderHolder builder) {
@@ -151,6 +153,7 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
     if (valueIdx >= 0) {
       converters[valueIdx] = new VariantValueConverter(this);
     }
+
     if (typedValueIdx >= 0) {
       Converter typedConverter = null;
       Type field = fields.get(typedValueIdx);
@@ -158,92 +161,15 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
       if (annotation instanceof LogicalTypeAnnotation.ListLogicalTypeAnnotation) {
         typedConverter = new VariantArrayConverter(field.asGroupType());
       } else if (!field.isPrimitive()) {
-        typedConverter = new VariantObjectConverter(field.asGroupType());
+        GroupType typed_value = field.asGroupType();
+        typedConverter = new VariantObjectConverter(typed_value);
         typedValueIsObject = true;
-      } else {
-        PrimitiveType primitive = field.asPrimitiveType();
-        PrimitiveType.PrimitiveTypeName primitiveType = primitive.getPrimitiveTypeName();
-        if (primitiveType == BOOLEAN) {
-          typedConverter = new VariantBooleanConverter();
-        } else if (annotation instanceof LogicalTypeAnnotation.IntLogicalTypeAnnotation) {
-          LogicalTypeAnnotation.IntLogicalTypeAnnotation intAnnotation =
-              (LogicalTypeAnnotation.IntLogicalTypeAnnotation) annotation;
-          if (!intAnnotation.isSigned()) {
-            throw new UnsupportedOperationException("Unsupported shredded value type: " +
-              intAnnotation.toString());
-          }
-          int width = intAnnotation.getBitWidth();
-          if (width == 8) {
-            typedConverter = new VariantByteConverter();
-          } else if (width == 16) {
-            typedConverter = new VariantShortConverter();
-          } else if (width == 32) {
-            typedConverter = new VariantIntConverter();
-          } else if (width == 64) {
-            typedConverter = new VariantLongConverter();
-          } else {
-            throw new UnsupportedOperationException("Unsupported shredded value type: " +
-                intAnnotation.toString());
-          }
-        } else if (annotation == null && primitiveType == INT32) {
-          typedConverter = new VariantIntConverter();
-        } else if (annotation == null && primitiveType == INT64) {
-          typedConverter = new VariantLongConverter();
-        } else if (primitiveType == FLOAT) {
-          typedConverter = new VariantFloatConverter();
-        } else if (primitiveType == DOUBLE) {
-          typedConverter = new VariantDoubleConverter();
-        } else if (annotation instanceof LogicalTypeAnnotation.DecimalLogicalTypeAnnotation) {
-          LogicalTypeAnnotation.DecimalLogicalTypeAnnotation decimalType =
-              (LogicalTypeAnnotation.DecimalLogicalTypeAnnotation) annotation;
-          typedConverter = new VariantDecimalConverter(decimalType.getScale());
-        } else if (annotation instanceof LogicalTypeAnnotation.DateLogicalTypeAnnotation) {
-          typedConverter = new VariantDateConverter();
-        } else if (annotation instanceof LogicalTypeAnnotation.TimestampLogicalTypeAnnotation) {
-          LogicalTypeAnnotation.TimestampLogicalTypeAnnotation timestampType =
-              (LogicalTypeAnnotation.TimestampLogicalTypeAnnotation) annotation;
-          if (timestampType.isAdjustedToUTC()) {
-            switch (timestampType.getUnit()) {
-              case MILLIS:
-                throw new IllegalArgumentException("MILLIS not supported by Variant");
-              case MICROS:
-                typedConverter = new VariantTimestampConverter();
-                break;
-              case NANOS:
-                typedConverter = new VariantTimestampNanosConverter();
-                break;
-            }
-          } else {
-            switch (timestampType.getUnit()) {
-              case MILLIS:
-                throw new IllegalArgumentException("MILLIS not supported by Variant");
-              case MICROS:
-                typedConverter = new VariantTimestampNtzConverter();
-                break;
-              case NANOS:
-                typedConverter = new VariantTimestampNanosNtzConverter();
-                break;
-            }
-          }
-        } else if (annotation instanceof LogicalTypeAnnotation.TimeLogicalTypeAnnotation) {
-          LogicalTypeAnnotation.TimeLogicalTypeAnnotation timeType =
-              (LogicalTypeAnnotation.TimeLogicalTypeAnnotation) annotation;
-          if (timeType.isAdjustedToUTC() || timeType.getUnit() != MICROS) {
-            throw new IllegalArgumentException(timeType.toString() + " not supported by Variant");
-          } else {
-            typedConverter = new VariantTimeConverter();
-          }
-        } else if (annotation instanceof LogicalTypeAnnotation.UUIDLogicalTypeAnnotation) {
-          typedConverter = new VariantUuidConverter();
-        } else if (annotation instanceof LogicalTypeAnnotation.StringLogicalTypeAnnotation) {
-          typedConverter = new VariantStringConverter();
-        } else if (primitiveType == BINARY) {
-          typedConverter = new VariantBinaryConverter();
-        } else {
-          String annotationString = annotation == null ? "" : annotation.toString();
-          throw new UnsupportedOperationException(
-              "Unsupported shredded value type: " + field.toString());
+        shreddedObjectKeys = new HashSet<>();
+        for (Type f : typed_value.getFields()) {
+          shreddedObjectKeys.add(f.getName());
         }
+      } else {
+        typedConverter = VariantScalarConverter.create(field.asPrimitiveType());
       }
 
       assert (typedConverter != null);
@@ -251,13 +177,6 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
     }
   }
 
-  /**
-   * called at initialization based on schema
-   * must consistently return the same object
-   *
-   * @param fieldIndex index of the field in this group
-   * @return the corresponding converter
-   */
   @Override
   public Converter getConverter(int fieldIndex) {
     return converters[fieldIndex];
@@ -265,9 +184,6 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
 
   /** runtime calls  **/
 
-  /**
-   * called at the beginning of the group managed by this converter
-   */
   @Override
   public void start() {
     startWritePos = builder.builder.getWritePos();
@@ -276,9 +192,6 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
     }
   }
 
-  /**
-   * call at the end of the group
-   */
   @Override
   public void end() {
     VariantBuilder builder = this.builder.builder;
@@ -286,13 +199,17 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
     Binary variantValue = null;
     ArrayList<VariantBuilder.FieldEntry> fields = null;
     if (typedValueIsObject) {
+      // Get the array that the child typed_value has been adding its fields to. We need to possibly add
+      // more values from the `value` field, then finalize. If the value was not an object, fields will be null.
       fields = ((VariantObjectConverter) converters[typedValueIdx]).getFieldsAndReset();
     }
     if (valueIdx >= 0) {
       variantValue = ((VariantValueConverter) converters[valueIdx]).getValue();
     }
     if (variantValue != null) {
-      // The second check is needed to handle the case of an empty object, which won't change write position.
+      // The first check guards against an invalid shredding where value and typed_value are both non-null, and
+      // typed_value is not an object. It is not sufficient, because a non-null but empty object in typed_value
+      // will leave the write position unchanged.
       if (startWritePos == builder.getWritePos() && fields == null) {
         // Nothing else was added. We can directly append this value.
         builder.shallowAppendVariant(
@@ -311,10 +228,17 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
         VariantUtil.handleObject(value, 0, (info) -> {
           for (int i = 0; i < info.numElements; ++i) {
             int id = VariantUtil.readUnsigned(value, info.idStart + info.idSize * i, info.idSize);
+            String key = VariantUtil.getMetadataKey(this.builder.getMetadata().getBytes(), id);
+            if (shreddedObjectKeys.contains(key)) {
+              // Skip any field ID that is also in the typed schema. This check is needed because readers with
+              // pushdown may not look at the value column, causing inconsistent results if a writer puth a given key
+              // only in the value column when it was present in the typed_value schema.
+              // Alternatively, we could fail at this point, since the shredding is invalid according to the spec.
+              continue;
+            }
             int offset = VariantUtil.readUnsigned(
                 value, info.offsetStart + info.offsetSize * i, info.offsetSize);
             int elementPos = info.dataStart + offset;
-            String key = VariantUtil.getMetadataKey(this.builder.getMetadata().getBytes(), id);
             finalFields.add(new VariantBuilder.FieldEntry(key, id, builder.getWritePos() - startWritePos));
             builder.shallowAppendVariant(value, elementPos);
           }
@@ -329,8 +253,8 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
 
     if (startWritePos == builder.getWritePos() && objectFieldName == null) {
       // If startWritePos == builder.getWritePos(), and this is an array element or top-level field, the
-      // spec considers this invalid, but suggests writing a VariantNull to the resulting variant. Given that
-      // this is a reference implementation, we might consder failing with an error?
+      // spec considers this invalid, but suggests writing a VariantNull to the resulting variant.
+      // We could also consider failing with an error.
       builder.appendNull();
     }
 
@@ -346,8 +270,8 @@ class VariantElementConverter extends GroupConverter implements VariantConverter
 }
 
 /**
- * Converter for shredded Variant values.
- *
+ * Converter for shredded Variant values. Connectors should implement the addVariant method, similar to
+ * the add* methods on PrimitiveConverter.
  */
 public abstract class VariantColumnConverter extends VariantElementConverter {
 
@@ -374,8 +298,6 @@ public abstract class VariantColumnConverter extends VariantElementConverter {
     builder = new VariantBuilderHolder();
     init(builder);
   }
-
-  /** runtime calls  **/
 
   /**
    * Set the final shredded value.
@@ -443,6 +365,8 @@ class VariantMetadataConverter extends PrimitiveConverter implements VariantConv
   }
 }
 
+// Converter for the `value` field. It does not append to VariantBuilder directly: it simply holds onto
+// its value for the parent converter to append.
 class VariantValueConverter extends PrimitiveConverter implements VariantConverter {
   private VariantElementConverter parent;
   Binary[] dict;
@@ -454,7 +378,6 @@ class VariantValueConverter extends PrimitiveConverter implements VariantConvert
     dict = null;
   }
 
-  // Value reader doesn't need a builder - it just holds onto its value for the parent to consume.
   @Override
   public void init(VariantBuilderHolder builderHolder) {}
 
@@ -490,6 +413,7 @@ class VariantValueConverter extends PrimitiveConverter implements VariantConvert
   }
 }
 
+// Base class for converting primitive typed_value fields.
 class VariantScalarConverter extends PrimitiveConverter implements VariantConverter {
   protected VariantBuilderHolder builder;
   private GroupType scalarType;
@@ -497,6 +421,93 @@ class VariantScalarConverter extends PrimitiveConverter implements VariantConver
   @Override
   public void init(VariantBuilderHolder builderHolder) {
     builder = builderHolder;
+  }
+
+  // Return an appropriate converter for the given Parquet type.
+  static VariantScalarConverter create(PrimitiveType primitive) {
+    VariantScalarConverter typedConverter = null;
+    LogicalTypeAnnotation annotation = primitive.getLogicalTypeAnnotation();
+    PrimitiveType.PrimitiveTypeName primitiveType = primitive.getPrimitiveTypeName();
+    if (primitiveType == BOOLEAN) {
+      typedConverter = new VariantBooleanConverter();
+    } else if (annotation instanceof LogicalTypeAnnotation.IntLogicalTypeAnnotation) {
+      LogicalTypeAnnotation.IntLogicalTypeAnnotation intAnnotation =
+          (LogicalTypeAnnotation.IntLogicalTypeAnnotation) annotation;
+      if (!intAnnotation.isSigned()) {
+        throw new UnsupportedOperationException("Unsupported shredded value type: " +
+          intAnnotation);
+      }
+      int width = intAnnotation.getBitWidth();
+      if (width == 8) {
+        typedConverter = new VariantByteConverter();
+      } else if (width == 16) {
+        typedConverter = new VariantShortConverter();
+      } else if (width == 32) {
+        typedConverter = new VariantIntConverter();
+      } else if (width == 64) {
+        typedConverter = new VariantLongConverter();
+      } else {
+        throw new UnsupportedOperationException("Unsupported shredded value type: " +
+            intAnnotation);
+      }
+    } else if (annotation == null && primitiveType == INT32) {
+      typedConverter = new VariantIntConverter();
+    } else if (annotation == null && primitiveType == INT64) {
+      typedConverter = new VariantLongConverter();
+    } else if (primitiveType == FLOAT) {
+      typedConverter = new VariantFloatConverter();
+    } else if (primitiveType == DOUBLE) {
+      typedConverter = new VariantDoubleConverter();
+    } else if (annotation instanceof LogicalTypeAnnotation.DecimalLogicalTypeAnnotation) {
+      LogicalTypeAnnotation.DecimalLogicalTypeAnnotation decimalType =
+          (LogicalTypeAnnotation.DecimalLogicalTypeAnnotation) annotation;
+      typedConverter = new VariantDecimalConverter(decimalType.getScale());
+    } else if (annotation instanceof LogicalTypeAnnotation.DateLogicalTypeAnnotation) {
+      typedConverter = new VariantDateConverter();
+    } else if (annotation instanceof LogicalTypeAnnotation.TimestampLogicalTypeAnnotation) {
+      LogicalTypeAnnotation.TimestampLogicalTypeAnnotation timestampType =
+          (LogicalTypeAnnotation.TimestampLogicalTypeAnnotation) annotation;
+      if (timestampType.isAdjustedToUTC()) {
+        switch (timestampType.getUnit()) {
+          case MILLIS:
+            throw new UnsupportedOperationException("MILLIS not supported by Variant");
+          case MICROS:
+            typedConverter = new VariantTimestampConverter();
+            break;
+          case NANOS:
+            typedConverter = new VariantTimestampNanosConverter();
+            break;
+        }
+      } else {
+        switch (timestampType.getUnit()) {
+          case MILLIS:
+            throw new UnsupportedOperationException("MILLIS not supported by Variant");
+          case MICROS:
+            typedConverter = new VariantTimestampNtzConverter();
+            break;
+          case NANOS:
+            typedConverter = new VariantTimestampNanosNtzConverter();
+            break;
+        }
+      }
+    } else if (annotation instanceof LogicalTypeAnnotation.TimeLogicalTypeAnnotation) {
+      LogicalTypeAnnotation.TimeLogicalTypeAnnotation timeType =
+          (LogicalTypeAnnotation.TimeLogicalTypeAnnotation) annotation;
+      if (timeType.isAdjustedToUTC() || timeType.getUnit() != MICROS) {
+        throw new UnsupportedOperationException(timeType + " not supported by Variant");
+      } else {
+        typedConverter = new VariantTimeConverter();
+      }
+    } else if (annotation instanceof LogicalTypeAnnotation.UUIDLogicalTypeAnnotation) {
+      typedConverter = new VariantUuidConverter();
+    } else if (annotation instanceof LogicalTypeAnnotation.StringLogicalTypeAnnotation) {
+      typedConverter = new VariantStringConverter();
+    } else if (primitiveType == BINARY) {
+      typedConverter = new VariantBinaryConverter();
+    } else {
+      throw new UnsupportedOperationException("Unsupported shredded value type: " + primitive);
+    }
+    return typedConverter;
   }
 }
 
@@ -720,14 +731,16 @@ class VariantArrayRepeatedConverter extends GroupConverter implements VariantCon
   }
 
   @Override
-  public void end() {
-  }
+  public void end() {}
 }
 
 class VariantObjectConverter extends GroupConverter implements VariantConverter {
   private VariantBuilderHolder builder;
   private VariantElementConverter[] converters;
   private ArrayList<VariantBuilder.FieldEntry> fieldEntries = new ArrayList<>();
+  // hasValue is used to distinguish a null typed_value (which may be a missing field of another object) from
+  // an empty object, since both will have an empty fieldEntries list at the end, and the parent converter
+  // will need to know if the field is missing or empty.
   private boolean hasValue = false;
   // The write position in the buffer for the start of this object.
   private int startWritePos;
@@ -748,6 +761,7 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
 
   // Return fieldEntries, and reset the the state for reading the next object.
   // If there was no object, return null.
+  // It must be called after each call to end() to ensure that hasValue is reset.
   ArrayList<VariantBuilder.FieldEntry> getFieldsAndReset() {
     if (!hasValue) {
       return null;
@@ -783,4 +797,3 @@ class VariantObjectConverter extends GroupConverter implements VariantConverter 
     hasValue = true;
   }
 }
-
