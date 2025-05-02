@@ -91,49 +91,72 @@ public class TestVariant extends DirectWriterTest {
     return variant(b -> b.appendString(s));
   }
 
-  private static final byte[][] PRIMITIVES =
-      new byte[][] {
-          variant(b -> b.appendNull()),
-          variant(b -> b.appendBoolean(true)),
-          variant(b -> b.appendBoolean(false)),
+  private static class PrimitiveCase {
+    Object avroValue;
+    byte[] value;
+
+    PrimitiveCase(Object avroValue, byte[] value) {
+      this.avroValue = avroValue;
+      this.value = value;
+    }
+  }
+
+  // Convert a string to a Decimal that can be written using Avro.
+  private static Object avroDecimalValue(String s) {
+    BigDecimal v = new BigDecimal(s);
+    int precision = v.precision();
+    if (precision <= 9) {
+      return v.unscaledValue().intValueExact();
+    } else if (precision <= 18) {
+      return v.unscaledValue().longValueExact();
+    } else {
+      return v.unscaledValue().toByteArray();
+    }
+  }
+
+  private static final PrimitiveCase[] PRIMITIVES =
+      new PrimitiveCase[] {
+          new PrimitiveCase(null, variant(b -> b.appendNull())),
+          new PrimitiveCase(true, variant(b -> b.appendBoolean(true))),
+          new PrimitiveCase(false, variant(b -> b.appendBoolean(false))),
           // TODO: fix types
-          variant(b -> b.appendLong(34)),
-          variant(b -> b.appendLong(-34)),
-          variant(b -> b.appendLong(1234)),
-          variant(b -> b.appendLong(-1234)),
-          variant(b -> b.appendLong(12345)),
-          variant(b -> b.appendLong(-12345)),
-          variant(b -> b.appendLong(9876543210L)),
-          variant(b -> b.appendLong(-9876543210L)),
-          variant(b -> b.appendFloat(10.11F)),
-          variant(b -> b.appendFloat(-10.11F)),
-          variant(b -> b.appendDouble(14.3D)),
-          variant(b -> b.appendDouble(-14.3D)),
+          new PrimitiveCase(34, variant(b -> b.appendLong(34))),
+          new PrimitiveCase(-34, variant(b -> b.appendLong(-34))),
+          new PrimitiveCase(1234, variant(b -> b.appendLong(1234))),
+          new PrimitiveCase(-1234, variant(b -> b.appendLong(-1234))),
+          new PrimitiveCase(12345, variant(b -> b.appendLong(12345))),
+          new PrimitiveCase(-12345, variant(b -> b.appendLong(-12345))),
+          new PrimitiveCase(9876543210L, variant(b -> b.appendLong(9876543210L))),
+          new PrimitiveCase(-9876543210L, variant(b -> b.appendLong(-9876543210L))),
+          new PrimitiveCase(10.11F, variant(b -> b.appendFloat(10.11F))),
+          new PrimitiveCase(-10.11F, variant(b -> b.appendFloat(-10.11F))),
+          new PrimitiveCase(14.3D, variant(b -> b.appendDouble(14.3D))),
+          new PrimitiveCase(-14.3D, variant(b -> b.appendDouble(-14.3D))),
           // Dates and timestamps aren't very interesting in Variant tests, since they are passed
           // to and from the API as integers. So just test arbitrary integer values.
-          variant(b -> b.appendDate(12345)),
-          variant(b -> b.appendDate(-12345)),
-          variant(b -> b.appendTimestamp(9876543210L)),
-          variant(b -> b.appendTimestamp(-9876543210L)),
-          variant(b -> b.appendTimestampNtz(9876543210L)),
-          variant(b -> b.appendTimestampNtz(-9876543210L)),
-          variant(b -> b.appendTimestampNanos(9876543210L)),
-          variant(b -> b.appendTimestampNanos(-9876543210L)),
-          variant(b -> b.appendTimestampNanosNtz(9876543210L)),
-          variant(b -> b.appendTimestampNanosNtz(-9876543210L)),
-          variant(b -> b.appendDecimal(new BigDecimal("123456.7890"))), // decimal4
-          variant(b -> b.appendDecimal(new BigDecimal("-123456.7890"))), // decimal4
-          variant(b -> b.appendDecimal(new BigDecimal("1234567890.987654321"))), // decimal8
-          variant(b -> b.appendDecimal(new BigDecimal("-1234567890.987654321"))), // decimal8
-          variant(b -> b.appendDecimal(new BigDecimal("9876543210.123456789"))), // decimal16
-          variant(b -> b.appendDecimal(new BigDecimal("-9876543210.123456789"))), // decimal16
-          variant(b -> b.appendBinary(new byte[] {0x0a, 0x0b, 0x0c, 0x0d})),
-          variant(b -> b.appendString("parquet")),
-          variant(b -> b.appendUUID(UUID.fromString("f24f9b64-81fa-49d1-b74e-8c09a6e31c56")))
+          new PrimitiveCase(12345, variant(b -> b.appendDate(12345))),
+          new PrimitiveCase(-12345, variant(b -> b.appendDate(-12345))),
+          new PrimitiveCase(9876543210L, variant(b -> b.appendTimestamp(9876543210L))),
+          new PrimitiveCase(-9876543210L, variant(b -> b.appendTimestamp(-9876543210L))),
+          new PrimitiveCase(9876543210L, variant(b -> b.appendTimestampNtz(9876543210L))),
+          new PrimitiveCase(-9876543210L, variant(b -> b.appendTimestampNtz(-9876543210L))),
+          new PrimitiveCase(9876543210L, variant(b -> b.appendTimestampNanos(9876543210L))),
+          new PrimitiveCase(-9876543210L, variant(b -> b.appendTimestampNanos(-9876543210L))),
+          new PrimitiveCase(9876543210L, variant(b -> b.appendTimestampNanosNtz(9876543210L))),
+          new PrimitiveCase(-9876543210L, variant(b -> b.appendTimestampNanosNtz(-9876543210L))),
+          new PrimitiveCase(avroDecimalValue("123456.7890"), variant(b -> b.appendDecimal(new BigDecimal("123456.7890")))), // decimal4
+          new PrimitiveCase(avroDecimalValue("-123456.7890"), variant(b -> b.appendDecimal(new BigDecimal("-123456.7890")))), // decimal4
+          new PrimitiveCase(avroDecimalValue("1234567890.987654321"), variant(b -> b.appendDecimal(new BigDecimal("1234567890.987654321")))), // decimal8
+          new PrimitiveCase(avroDecimalValue("-1234567890.987654321"), variant(b -> b.appendDecimal(new BigDecimal("-1234567890.987654321")))), // decimal8
+          new PrimitiveCase(avroDecimalValue("9876543210.123456789"), variant(b -> b.appendDecimal(new BigDecimal("9876543210.123456789")))), // decimal16
+          new PrimitiveCase(avroDecimalValue("-9876543210.123456789"), variant(b -> b.appendDecimal(new BigDecimal("-9876543210.123456789")))), // decimal16
+          new PrimitiveCase(new byte[] {0x0a, 0x0b, 0x0c, 0x0d}, variant(b -> b.appendBinary(new byte[] {0x0a, 0x0b, 0x0c, 0x0d}))),
+          new PrimitiveCase("parquet", variant(b -> b.appendString("parquet"))),
+          new PrimitiveCase(UUID.fromString("f24f9b64-81fa-49d1-b74e-8c09a6e31c56"), variant(b -> b.appendUUID(UUID.fromString("f24f9b64-81fa-49d1-b74e-8c09a6e31c56"))))
       };
 
   private byte[] EMPTY_METADATA = fullVariant(b -> b.appendNull()).getMetadata();
-  private byte[] NULL_VALUE = PRIMITIVES[0];
+  private byte[] NULL_VALUE = PRIMITIVES[0].value;
 
   private byte[] TEST_METADATA;
   private byte[] TEST_OBJECT;
@@ -165,8 +188,8 @@ public class TestVariant extends DirectWriterTest {
     });
 
     testCases = new ArrayList<>();
-    for (byte[] p : PRIMITIVES) {
-      testCases.add(new TestCase(p, EMPTY_METADATA));
+    for (PrimitiveCase p : PRIMITIVES) {
+      testCases.add(new TestCase(p.value, EMPTY_METADATA));
     }
     testCases.add(new TestCase(TEST_OBJECT, TEST_METADATA));
   }
@@ -624,12 +647,12 @@ public class TestVariant extends DirectWriterTest {
 
   @Test
   public void testShreddedVariantPrimitives() throws IOException {
-    for (byte[] v : PRIMITIVES) {
-      if (v.equals(NULL_VALUE)) {
-        // NULL isn't a valid type for shredding.
+    for (PrimitiveCase p : PRIMITIVES) {
+      if (p.avroValue == null) {
+        // null isn't a valid type for shredding.
         continue;
       }
-      TestSchema schema = new TestSchema(shreddedType(new Variant(v, EMPTY_METADATA)));
+      TestSchema schema = new TestSchema(shreddedType(new Variant(p.value, EMPTY_METADATA)));
 
       GenericRecord variant =
           recordFromMap(
@@ -638,15 +661,14 @@ public class TestVariant extends DirectWriterTest {
                   "metadata",
                   EMPTY_METADATA,
                   "typed_value",
-                  // TODO: See Ryan's comment: have the test case code produce both the value and variant equivalent.
-                  toAvroValue(new Variant(v, EMPTY_METADATA))));
+                  p.avroValue));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
       GenericRecord actual = writeAndRead(schema, record);
       Assert.assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
-      assertEquivalent(EMPTY_METADATA, v, actualVariant);
+      assertEquivalent(EMPTY_METADATA, p.value, actualVariant);
     }
   }
 
@@ -1047,6 +1069,59 @@ public class TestVariant extends DirectWriterTest {
   }
 
   @Test
+  public void testPartiallyShreddedObjectOutOfOrder() throws IOException {
+    // The schema is not in alphabetical order, and the unshredded field is also not.
+    // The resulting object should be logically the same (i.e. the offset list must be in
+    // alphabetical order), but the layout of the values in the binary may differ.
+    GroupType fieldD = shreddedField("d", shreddedPrimitive(PrimitiveTypeName.INT32));
+    GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
+    GroupType objectFields = objectFields(fieldD, fieldA);
+    TestSchema schema = new TestSchema(objectFields);
+
+    byte[] baseObject = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    GenericRecord recordA = recordFromMap(fieldD, ImmutableMap.of("value", NULL_VALUE));
+    GenericRecord recordB = recordFromMap(fieldA, ImmutableMap.of("typed_value", "iceberg"));
+    GenericRecord fields = recordFromMap(objectFields, ImmutableMap.of("d", recordA, "a", recordB));
+    GenericRecord variant =
+        recordFromMap(
+            schema.unannotatedVariantType,
+            ImmutableMap.of(
+                "metadata",
+                TEST_METADATA,
+                "value",
+                baseObject,
+                "typed_value",
+                fields));
+    GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
+
+    GenericRecord actual = writeAndRead(schema, record);
+
+    Assert.assertEquals(actual.get("id"), 1);
+
+    byte[] expectedValue = variant(TEST_METADATA, b -> {
+      int startWritePos = b.getWritePos();
+      ArrayList<VariantBuilder.FieldEntry> entries = new ArrayList<>();
+      entries.add(new VariantBuilder.FieldEntry("a", 0, b.getWritePos() - startWritePos));
+      b.appendString("iceberg");
+      entries.add(new VariantBuilder.FieldEntry("b", 1, b.getWritePos() - startWritePos));
+      b.appendDate(12345);
+      entries.add(new VariantBuilder.FieldEntry("d", 3, b.getWritePos() - startWritePos));
+      b.appendNull();
+      b.finishWritingObject(startWritePos, entries);
+    });
+
+    GenericRecord actualVariant = (GenericRecord) actual.get("var");
+    assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
+  }
+
+  @Test
   public void testPartiallyShreddedObject() throws IOException {
     GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
     GroupType fieldB = shreddedField("b", shreddedPrimitive(PrimitiveTypeName.BINARY, STRING));
@@ -1095,7 +1170,6 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(TEST_METADATA, expectedValue, actualVariant);
   }
-
   @Test
   public void testPartiallyShreddedObjectFieldConflict() throws IOException {
     GroupType fieldA = shreddedField("a", shreddedPrimitive(PrimitiveTypeName.INT32));
@@ -2236,7 +2310,36 @@ public class TestVariant extends DirectWriterTest {
   // E.g. object fields may be ordered differently in the binary.
   void assertEquivalent(byte[] expectedMetadata, byte[] expectedValue, GenericRecord actual) {
     Assert.assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
-    // TODO: Implement logical equivalence check.
-    Assert.assertEquals(ByteBuffer.wrap(expectedValue), (ByteBuffer) actual.get("value"));
+    Assert.assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
+    assertEquivalent(new Variant(expectedValue, expectedMetadata),
+        new Variant(((ByteBuffer) actual.get("value")).array(), expectedMetadata));
+  }
+
+  void assertEquivalent(Variant expected, Variant actual) {
+    Assert.assertEquals(expected.getType(), actual.getType());
+    switch (expected.getType()) {
+      case STRING:
+        // Short strings may use the compact or extended representation.
+        Assert.assertEquals(expected.getString(), actual.getString());
+        break;
+      case ARRAY:
+        Assert.assertEquals(expected.numArrayElements(), actual.numArrayElements());
+        for (int i = 0; i < expected.numArrayElements(); ++i) {
+          assertEquivalent(expected.getElementAtIndex(i), actual.getElementAtIndex(i));
+        }
+        break;
+      case OBJECT:
+        Assert.assertEquals(expected.numObjectElements(), actual.numObjectElements());
+        for (int i = 0; i < expected.numObjectElements(); ++i) {
+          Variant.ObjectField expectedField = expected.getFieldAtIndex(i);
+          Variant.ObjectField actualField = actual.getFieldAtIndex(i);
+          Assert.assertEquals(expectedField.key, actualField.key);
+          assertEquivalent(expectedField.value, actualField.value);
+        }
+        break;
+      default:
+        // All other types have a single representation, and must be bit-for-bit identical.
+        Assert.assertArrayEquals(expected.getValue(), actual.getValue());
+    }
   }
 }
