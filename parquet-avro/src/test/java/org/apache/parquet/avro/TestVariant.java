@@ -19,6 +19,7 @@
 package org.apache.parquet.avro;
 
 import static org.apache.parquet.avro.AvroTestUtil.*;
+import static org.junit.Assert.*;
 
 import java.io.File;
 import java.io.IOException;
@@ -28,7 +29,6 @@ import java.nio.ByteOrder;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
-import java.util.stream.Stream;
 import com.google.common.collect.ImmutableMap;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -52,7 +52,6 @@ import org.apache.parquet.variant.Variant;
 import org.apache.parquet.variant.VariantBuilder;
 import org.apache.parquet.variant.VariantDuplicateKeyException;
 import org.apache.parquet.variant.VariantUtil;
-import org.junit.Assert;
 import org.junit.Test;
 
 public class TestVariant extends DirectWriterTest {
@@ -572,10 +571,10 @@ public class TestVariant extends DirectWriterTest {
         AvroParquetReader<T> reader, Schema expectedSchema, T... expectedRecords) throws IOException {
       for (T expectedRecord : expectedRecords) {
         T actualRecord = reader.read();
-        Assert.assertEquals("Should match expected schema", expectedSchema, actualRecord.getSchema());
-        Assert.assertEquals("Should match the expected record", expectedRecord, actualRecord);
+        assertEquals("Should match expected schema", expectedSchema, actualRecord.getSchema());
+        assertEquals("Should match the expected record", expectedRecord, actualRecord);
       }
-      Assert.assertNull(
+      assertNull(
           "Should only contain " + expectedRecords.length + " record" + (expectedRecords.length == 1 ? "" : "s"),
           reader.read());
   }
@@ -621,7 +620,7 @@ public class TestVariant extends DirectWriterTest {
           ImmutableMap.of("metadata", t.metadata, "value", t.value));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
-      Assert.assertEquals(actual.get("id"), 1);
+      assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
       assertEquivalent(t.metadata, t.value, actualVariant);
@@ -638,7 +637,7 @@ public class TestVariant extends DirectWriterTest {
           ImmutableMap.of("metadata", t.metadata, "value", t.value));
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
       GenericRecord actual = writeAndRead(schema, record);
-      Assert.assertEquals(actual.get("id"), 1);
+      assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
       assertEquivalent(t.metadata, t.value, actualVariant);
@@ -665,7 +664,7 @@ public class TestVariant extends DirectWriterTest {
       GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
       GenericRecord actual = writeAndRead(schema, record);
-      Assert.assertEquals(actual.get("id"), 1);
+      assertEquals(actual.get("id"), 1);
 
       GenericRecord actualVariant = (GenericRecord) actual.get("var");
       assertEquivalent(EMPTY_METADATA, p.value, actualVariant);
@@ -681,7 +680,7 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, NULL_VALUE, actualVariant);
@@ -714,7 +713,7 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord record = recordFromMap(unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, variant(34), actualVariant);
@@ -781,7 +780,7 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     Variant expectedValue = VariantBuilder.parseJson(
         "{\"a\": null, \"b\": \"\"}");
@@ -823,7 +822,7 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     Variant expectedValue = VariantBuilder.parseJson(
         "{\"a\": 1234, \"b\": \"iceberg\"}");
@@ -850,7 +849,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     // TODO: I want to make sure that the metadata IDs are the same, so I need to pre-populate the metadata.
     Variant expectedValue = VariantBuilder.parseJson(
@@ -876,7 +875,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     Variant expectedValue = VariantBuilder.parseJson("{}");
 
@@ -908,7 +907,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
             int startWritePos = b.getWritePos();
@@ -949,7 +948,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
@@ -985,7 +984,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
@@ -1052,7 +1051,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
@@ -1103,7 +1102,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
@@ -1153,7 +1152,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
@@ -1239,7 +1238,7 @@ public class TestVariant extends DirectWriterTest {
 
     GenericRecord actual = writeAndRead(schema, record);
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     byte[] expectedValue = variant(TEST_METADATA, b -> {
       int startWritePos = b.getWritePos();
@@ -1273,7 +1272,7 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord record = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", variant));
 
     GenericRecord actual = writeAndRead(schema, record);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
 
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(TEST_METADATA, variant(34), actualVariant);
@@ -1410,24 +1409,24 @@ public class TestVariant extends DirectWriterTest {
     });
 
     List<GenericRecord> records = writeAndRead(schema, Arrays.asList(zero, one, two, three));
-    Assert.assertEquals(records.size(), 4);
+    assertEquals(records.size(), 4);
 
     GenericRecord actualZero = records.get(0);
-    Assert.assertEquals(actualZero.get("id"), 0);
-    Assert.assertEquals(actualZero.get("var"), null);
+    assertEquals(actualZero.get("id"), 0);
+    assertEquals(actualZero.get("var"), null);
 
     GenericRecord actualOne = records.get(1);
-    Assert.assertEquals(actualOne.get("id"), 1);
+    assertEquals(actualOne.get("id"), 1);
     GenericRecord actualOneVariant = (GenericRecord) actualOne.get("var");
     assertEquivalent(TEST_METADATA, expectedOne, actualOneVariant);
 
     GenericRecord actualTwo = records.get(2);
-    Assert.assertEquals(actualTwo.get("id"), 2);
+    assertEquals(actualTwo.get("id"), 2);
     GenericRecord actualTwoVariant = (GenericRecord) actualTwo.get("var");
     assertEquivalent(TEST_METADATA, expectedTwo, actualTwoVariant);
 
     GenericRecord actualThree = records.get(3);
-    Assert.assertEquals(actualThree.get("id"), 3);
+    assertEquals(actualThree.get("id"), 3);
     GenericRecord actualThreeVariant = (GenericRecord) actualThree.get("var");
     assertEquivalent(TEST_METADATA, expectedThree, actualThreeVariant);
   }
@@ -1459,7 +1458,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actual = writeAndRead(schema, row);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, expected, actualVariant);
   }
@@ -1480,7 +1479,7 @@ public class TestVariant extends DirectWriterTest {
     GenericRecord row = recordFromMap(schema.unannotatedParquetSchema, ImmutableMap.of("id", 1, "var", var));
 
     GenericRecord actual = writeAndRead(schema, row);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, NULL_VALUE, actualVariant);
   }
@@ -1504,7 +1503,7 @@ public class TestVariant extends DirectWriterTest {
       b.finishWritingArray(startWritePos, entries);
     });
 
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, emptyArray, actualVariant);
   }
@@ -1539,7 +1538,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actual = writeAndRead(schema, row);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, expected, actualVariant);
   }
@@ -1582,7 +1581,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actual = writeAndRead(schema, row);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, expected, actualVariant);
   }
@@ -1718,12 +1717,12 @@ public class TestVariant extends DirectWriterTest {
     // verify
     List<GenericRecord> actual = writeAndRead(schema, Arrays.asList(row1, row2));
     GenericRecord actual1 = actual.get(0);
-    Assert.assertEquals(actual1.get("id"), 1);
+    assertEquals(actual1.get("id"), 1);
     GenericRecord actualVariant1 = (GenericRecord) actual1.get("var");
     assertEquivalent(TEST_METADATA, expected1, actualVariant1);
 
     GenericRecord actual2 = actual.get(1);
-    Assert.assertEquals(actual2.get("id"), 2);
+    assertEquals(actual2.get("id"), 2);
     GenericRecord actualVariant2 = (GenericRecord) actual2.get("var");
     assertEquivalent(TEST_METADATA, expected2, actualVariant2);
   }
@@ -1797,22 +1796,22 @@ public class TestVariant extends DirectWriterTest {
 
     List<GenericRecord> actual = writeAndRead(schema, Arrays.asList(row1, row2, row3, row4));
     GenericRecord actual1 = actual.get(0);
-    Assert.assertEquals(actual1.get("id"), 1);
+    assertEquals(actual1.get("id"), 1);
     GenericRecord actualVariant1 = (GenericRecord) actual1.get("var");
     assertEquivalent(EMPTY_METADATA, expectedArray1, actualVariant1);
 
     GenericRecord actual2 = actual.get(1);
-    Assert.assertEquals(actual2.get("id"), 2);
+    assertEquals(actual2.get("id"), 2);
     GenericRecord actualVariant2 = (GenericRecord) actual2.get("var");
     assertEquivalent(EMPTY_METADATA, expectedValue2, actualVariant2);
 
     GenericRecord actual3 = actual.get(2);
-    Assert.assertEquals(actual3.get("id"), 3);
+    assertEquals(actual3.get("id"), 3);
     GenericRecord actualVariant3 = (GenericRecord) actual3.get("var");
     assertEquivalent(TEST_METADATA, expectedObject3, actualVariant3);
 
     GenericRecord actual4 = actual.get(3);
-    Assert.assertEquals(actual4.get("id"), 4);
+    assertEquals(actual4.get("id"), 4);
     GenericRecord actualVariant4 = (GenericRecord) actual4.get("var");
     assertEquivalent(TEST_METADATA, expectedArray4, actualVariant4);
   }
@@ -1864,7 +1863,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actual = writeAndRead(schema, row);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, expectedArray, actualVariant);
   }
@@ -1897,7 +1896,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actual = writeAndRead(schema, row);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, expectedArray, actualVariant);
   }
@@ -1926,7 +1925,7 @@ public class TestVariant extends DirectWriterTest {
     });
 
     GenericRecord actual = writeAndRead(schema, record);
-    Assert.assertEquals(actual.get("id"), 1);
+    assertEquals(actual.get("id"), 1);
     GenericRecord actualVariant = (GenericRecord) actual.get("var");
     assertEquivalent(EMPTY_METADATA, expectedArray, actualVariant);
   }
@@ -2289,15 +2288,15 @@ public class TestVariant extends DirectWriterTest {
   void assertThrows(Callable callable, Class<? extends Exception> exception, String msg) {
     try {
       callable.call();
-      Assert.fail("No exception was thrown. Expected: " + exception.getName());
+      fail("No exception was thrown. Expected: " + exception.getName());
     } catch (Exception actual) {
       try {
         if (actual.getClass().equals(ParquetDecodingException.class)) {
-          Assert.assertTrue(actual.getCause().getMessage().contains(msg));
-          Assert.assertEquals(actual.getCause().getClass(), exception);
+          assertTrue(actual.getCause().getMessage().contains(msg));
+          assertEquals(actual.getCause().getClass(), exception);
         } else {
-          Assert.assertTrue(actual.getMessage().contains(msg));
-          Assert.assertEquals(actual.getClass(), exception);
+          assertTrue(actual.getMessage().contains(msg));
+          assertEquals(actual.getClass(), exception);
         }
       } catch (AssertionError e) {
         e.addSuppressed(actual);
@@ -2309,37 +2308,37 @@ public class TestVariant extends DirectWriterTest {
   // Assert that metadata contains identical bytes to expected, and value is logically equivalent.
   // E.g. object fields may be ordered differently in the binary.
   void assertEquivalent(byte[] expectedMetadata, byte[] expectedValue, GenericRecord actual) {
-    Assert.assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
-    Assert.assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
+    assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
+    assertEquals(ByteBuffer.wrap(expectedMetadata), (ByteBuffer) actual.get("metadata"));
     assertEquivalent(new Variant(expectedValue, expectedMetadata),
         new Variant(((ByteBuffer) actual.get("value")).array(), expectedMetadata));
   }
 
   void assertEquivalent(Variant expected, Variant actual) {
-    Assert.assertEquals(expected.getType(), actual.getType());
+    assertEquals(expected.getType(), actual.getType());
     switch (expected.getType()) {
       case STRING:
         // Short strings may use the compact or extended representation.
-        Assert.assertEquals(expected.getString(), actual.getString());
+        assertEquals(expected.getString(), actual.getString());
         break;
       case ARRAY:
-        Assert.assertEquals(expected.numArrayElements(), actual.numArrayElements());
+        assertEquals(expected.numArrayElements(), actual.numArrayElements());
         for (int i = 0; i < expected.numArrayElements(); ++i) {
           assertEquivalent(expected.getElementAtIndex(i), actual.getElementAtIndex(i));
         }
         break;
       case OBJECT:
-        Assert.assertEquals(expected.numObjectElements(), actual.numObjectElements());
+        assertEquals(expected.numObjectElements(), actual.numObjectElements());
         for (int i = 0; i < expected.numObjectElements(); ++i) {
           Variant.ObjectField expectedField = expected.getFieldAtIndex(i);
           Variant.ObjectField actualField = actual.getFieldAtIndex(i);
-          Assert.assertEquals(expectedField.key, actualField.key);
+          assertEquals(expectedField.key, actualField.key);
           assertEquivalent(expectedField.value, actualField.value);
         }
         break;
       default:
         // All other types have a single representation, and must be bit-for-bit identical.
-        Assert.assertArrayEquals(expected.getValue(), actual.getValue());
+        assertArrayEquals(expected.getValue(), actual.getValue());
     }
   }
 }
